@@ -29,8 +29,8 @@ register_bitfields![u32,
 #[derive(Copy, Clone)]
 pub struct PMPRegion {
     location: Option<(*const u8, usize)>,
-    _base_address: u32,
-    _cfg: tock_registers::registers::FieldValue<u32, pmpcfg::Register>,
+    base_address: u32,
+    cfg: tock_registers::registers::FieldValue<u32, pmpcfg::Register>,
 }
 
 impl PMPRegion {
@@ -61,16 +61,16 @@ impl PMPRegion {
 
         PMPRegion {
             location: Some((start, size)),
-            _base_address: base_address,
-            _cfg: pmpcfg,
+            base_address: base_address,
+            cfg: pmpcfg,
         }
     }
 
     fn empty(_region_num: usize) -> PMPRegion {
         PMPRegion {
             location: None,
-            _base_address: 0,
-            _cfg: pmpcfg::r::CLEAR + pmpcfg::w::CLEAR + pmpcfg::x::CLEAR,
+            base_address: 0,
+            cfg: pmpcfg::r::CLEAR + pmpcfg::w::CLEAR + pmpcfg::x::CLEAR,
         }
     }
 
@@ -477,5 +477,81 @@ impl kernel::mpu::MPU for PMPConfig {
         Ok(())
     }
 
-    fn configure_mpu(&self, _config: &Self::MpuConfig) {}
+    fn configure_mpu(&self, config: &Self::MpuConfig) {
+        // Clear the pmpcfg0 register as this is set by the disable function
+        csr::CSR.pmpcfg0.set(0);
+
+        for x in 0..self.total_regions {
+            let region = config.regions[x];
+            let cfg_val = region.cfg.value << ((x % 4) * 8);
+
+            match x {
+                0 => {
+                    csr::CSR.pmpcfg0.set(cfg_val | csr::CSR.pmpcfg0.get());
+                    csr::CSR.pmpaddr0.set(region.base_address);
+                }
+                1 => {
+                    csr::CSR.pmpcfg0.set(cfg_val | csr::CSR.pmpcfg0.get());
+                    csr::CSR.pmpaddr1.set(region.base_address);
+                }
+                2 => {
+                    csr::CSR.pmpcfg0.set(cfg_val | csr::CSR.pmpcfg0.get());
+                    csr::CSR.pmpaddr2.set(region.base_address);
+                }
+                3 => {
+                    csr::CSR.pmpcfg0.set(cfg_val | csr::CSR.pmpcfg0.get());
+                    csr::CSR.pmpaddr3.set(region.base_address);
+                }
+                4 => {
+                    csr::CSR.pmpcfg1.set(cfg_val | csr::CSR.pmpcfg1.get());
+                    csr::CSR.pmpaddr4.set(region.base_address);
+                }
+                5 => {
+                    csr::CSR.pmpcfg1.set(cfg_val | csr::CSR.pmpcfg1.get());
+                    csr::CSR.pmpaddr5.set(region.base_address);
+                }
+                6 => {
+                    csr::CSR.pmpcfg1.set(cfg_val | csr::CSR.pmpcfg1.get());
+                    csr::CSR.pmpaddr6.set(region.base_address);
+                }
+                7 => {
+                    csr::CSR.pmpcfg1.set(cfg_val | csr::CSR.pmpcfg1.get());
+                    csr::CSR.pmpaddr7.set(region.base_address);
+                }
+                8 => {
+                    csr::CSR.pmpcfg2.set(cfg_val | csr::CSR.pmpcfg2.get());
+                    csr::CSR.pmpaddr8.set(region.base_address);
+                }
+                9 => {
+                    csr::CSR.pmpcfg2.set(cfg_val | csr::CSR.pmpcfg2.get());
+                    csr::CSR.pmpaddr9.set(region.base_address);
+                }
+                10 => {
+                    csr::CSR.pmpcfg2.set(cfg_val | csr::CSR.pmpcfg2.get());
+                    csr::CSR.pmpaddr10.set(region.base_address);
+                }
+                11 => {
+                    csr::CSR.pmpcfg2.set(cfg_val | csr::CSR.pmpcfg2.get());
+                    csr::CSR.pmpaddr11.set(region.base_address);
+                }
+                12 => {
+                    csr::CSR.pmpcfg3.set(cfg_val | csr::CSR.pmpcfg3.get());
+                    csr::CSR.pmpaddr12.set(region.base_address);
+                }
+                13 => {
+                    csr::CSR.pmpcfg3.set(cfg_val | csr::CSR.pmpcfg3.get());
+                    csr::CSR.pmpaddr13.set(region.base_address);
+                }
+                14 => {
+                    csr::CSR.pmpcfg3.set(cfg_val | csr::CSR.pmpcfg3.get());
+                    csr::CSR.pmpaddr14.set(region.base_address);
+                }
+                15 => {
+                    csr::CSR.pmpcfg3.set(cfg_val | csr::CSR.pmpcfg3.get());
+                    csr::CSR.pmpaddr15.set(region.base_address);
+                }
+                _ => break,
+            }
+        }
+    }
 }
