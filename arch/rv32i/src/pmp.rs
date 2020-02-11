@@ -362,9 +362,9 @@ impl kernel::mpu::MPU for PMPConfig {
         let mut start = unallocated_memory_start as usize;
         let mut size = min_region_size;
 
-        // Region start always has to align to 4 bytes
-        if start % 4 != 0 {
-            start += 4 - (start % 4);
+        // Region start always has to align to the size
+        if start % size != 0 {
+            start += size - (start % size);
         }
 
         // Regions must be at least 8 bytes
@@ -372,8 +372,8 @@ impl kernel::mpu::MPU for PMPConfig {
             size = 8;
         }
 
-        let shift = math::log_base_two(size as u32) - 3;
-        let mask = (1 << (shift + 1)) - 1;
+        let shift = math::log_base_two(size as u32) - 2;
+        let mask = (1 << shift) - 1;
         let base_address = (((start as u32) >> 2) & !mask) | (mask >> 1);
 
         let region = PMPRegion::new(start as *const u8, base_address, size, permissions);
@@ -411,6 +411,7 @@ impl kernel::mpu::MPU for PMPConfig {
         // The region should start as close as possible to the start of the unallocated memory.
         let mut region_start = unallocated_memory_start as usize;
 
+        // Region start always has to align to the size
         if region_start % region_size != 0 {
             region_start += region_size - (region_start % region_size);
         }
@@ -422,8 +423,10 @@ impl kernel::mpu::MPU for PMPConfig {
             return None;
         }
 
-        let shift = math::log_base_two(region_size as u32) - 3;
-        let mask = (1 << (shift + 1)) - 1;
+        debug!("2 region_start: 0x{:x}; region_size: 0x{:x}", region_start, region_size);
+
+        let shift = math::log_base_two(region_size as u32) - 2;
+        let mask = (1 << shift) - 1;
         let base_address = (((region_start as u32) >> 2) & !mask) | (mask >> 1);
 
         let region = PMPRegion::new(
@@ -456,13 +459,18 @@ impl kernel::mpu::MPU for PMPConfig {
         let app_memory_break = app_memory_break as usize;
         let kernel_memory_break = kernel_memory_break as usize;
 
+        // Region start always has to align to the size
+        if region_start % region_size != 0 {
+            region_start += region_size - (region_start % region_size);
+        }
+
         // Out of memory
         if app_memory_break > kernel_memory_break {
             return Err(());
         }
 
-        let shift = math::log_base_two(region_size as u32) - 3;
-        let mask = (1 << (shift + 1)) - 1;
+        let shift = math::log_base_two(region_size as u32) - 2;
+        let mask = (1 << shift) - 1;
         let base_address = (((region_start as u32) >> 2) & !mask) | (mask >> 1);
 
         let region = PMPRegion::new(
