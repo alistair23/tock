@@ -129,6 +129,10 @@ pub trait ProcessType {
     /// Move this process from the running state to the yielded state.
     fn set_yielded_state(&self);
 
+    fn backup_stored_state(&self);
+
+    fn restore_stored_state(&self);
+
     /// Move this process from running or yielded state into the stopped state
     fn stop(&self);
 
@@ -504,6 +508,9 @@ pub struct Process<'a, C: 'static + Chip> {
     stored_state:
         Cell<<<C as Chip>::UserspaceKernelBoundary as UserspaceKernelBoundary>::StoredState>,
 
+    backup_stored_state:
+        Cell<<<C as Chip>::UserspaceKernelBoundary as UserspaceKernelBoundary>::StoredState>,
+
     /// Whether the scheduler can schedule this app.
     state: Cell<State>,
 
@@ -597,6 +604,14 @@ impl<C: Chip> ProcessType for Process<'a, C> {
             self.state.set(State::Yielded);
             self.kernel.decrement_work();
         }
+    }
+
+    fn backup_stored_state(&self) {
+        self.backup_stored_state.set(self.stored_state.get())
+    }
+
+    fn restore_stored_state(&self) {
+        self.stored_state.set(self.backup_stored_state.get())
     }
 
     fn stop(&self) {
