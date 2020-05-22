@@ -13,6 +13,7 @@ pub mod gpio;
 pub mod nvic;
 pub mod pwrctrl;
 pub mod uart;
+pub mod ctimer;
 
 use cortexm4::{
     generic_isr, hard_fault_handler, scb, svc_handler, systick_handler, unhandled_interrupt,
