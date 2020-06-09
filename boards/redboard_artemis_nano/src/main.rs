@@ -53,6 +53,7 @@ struct RedboardArtemisNano {
     gpio: &'static capsules::gpio::GPIO<'static, apollo3::gpio::GpioPin>,
     console: &'static capsules::console::Console<'static>,
     i2c_master: &'static capsules::i2c_master::I2CMasterDriver<apollo3::iom::Iom<'static>>,
+    temp: &'static capsules::temperature::TemperatureSensor<'static>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -67,6 +68,7 @@ impl Platform for RedboardArtemisNano {
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::console::DRIVER_NUM => f(Some(self.console)),
             capsules::i2c_master::DRIVER_NUM => f(Some(self.i2c_master)),
+            capsules::temperature::DRIVER_NUM => f(Some(self.temp)),
             _ => f(None),
         }
     }
@@ -175,8 +177,27 @@ pub unsafe fn reset_handler() {
         )
     );
 
-    apollo3::iom::IOM2.set_master_client(i2c_master);
+    let mux_i2c = components::i2c::I2CMuxComponent::new(
+        &apollo3::iom::IOM2,
+        Some(&apollo3::iom::IOM2),
+        dynamic_deferred_caller,
+    )
+    .finalize(components::i2c_mux_component_helper!());
+
+    apollo3::iom::IOM2.set_master_client(mux_i2c);
     apollo3::iom::IOM2.enable();
+
+    let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
+    let grant_temperature = board_kernel.create_grant(&grant_cap);
+
+    let mlx90614 = components::mlx90614::Mlx90614SMBusComponent::new(mux_i2c, 0x5A)
+        .finalize(components::mlx90614_component_helper!());
+
+    let temp = static_init!(
+        capsules::temperature::TemperatureSensor<'static>,
+        capsules::temperature::TemperatureSensor::new(mlx90614, grant_temperature)
+    );
+    kernel::hil::sensors::TemperatureDriver::set_client(mlx90614, temp);
 
     debug!("Initialization complete. Entering main loop");
 
@@ -198,6 +219,7 @@ pub unsafe fn reset_handler() {
         gpio,
         led,
         i2c_master,
+        temp,
     };
 
     kernel::procs::load_processes(
