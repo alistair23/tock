@@ -382,6 +382,8 @@ where
     fn fired(&self) {
         let now = self.alarm.now();
 
+        debug!("Alarm fired");
+
         self.app.each(|app| {
             if let Expiration::Abs(exp) = app.alarm_data.expiration {
                 let expired =
@@ -401,6 +403,7 @@ where
 
                     match app.process_status {
                         Some(BLEState::AdvertisingIdle) => {
+                            debug!("AdvertisingIdle");
                             self.busy.set(true);
                             app.process_status =
                                 Some(BLEState::Advertising(RadioChannel::AdvertisingChannel37));
@@ -409,6 +412,7 @@ where
                             app.send_advertisement(&self, RadioChannel::AdvertisingChannel37);
                         }
                         Some(BLEState::ScanningIdle) => {
+                            debug!("ScanningIdle");
                             self.busy.set(true);
                             app.process_status =
                                 Some(BLEState::Scanning(RadioChannel::AdvertisingChannel37));
@@ -437,7 +441,9 @@ where
     A: kernel::hil::time::Alarm<'a>,
 {
     fn receive_event(&self, buf: &'static mut [u8], len: u8, result: ReturnCode) {
+        debug!("receive_event");
         self.receiving_app.map(|appid| {
+            debug!("receive_event: {:?}", appid);
             let _ = self.app.enter(*appid, |app, _| {
                 // Validate the received data, because ordinary BLE packets can be bigger than 39
                 // bytes. Thus, we need to check for that!
@@ -450,6 +456,7 @@ where
 
                 if len <= PACKET_LENGTH as u8 && result == ReturnCode::SUCCESS {
                     // write to buffer in userland
+                    debug!("Sending to userland: 1");
                     let success = app
                         .scan_buffer
                         .as_mut()
@@ -515,6 +522,7 @@ where
                             Some(BLEState::Advertising(RadioChannel::AdvertisingChannel38));
                         self.sending_app.set(app.appid());
                         self.radio.set_tx_power(app.tx_power);
+                        debug!("Channel37");
                         app.send_advertisement(&self, RadioChannel::AdvertisingChannel38);
                     }
 
@@ -522,6 +530,7 @@ where
                         app.process_status =
                             Some(BLEState::Advertising(RadioChannel::AdvertisingChannel39));
                         self.sending_app.set(app.appid());
+                        debug!("Channel38");
                         app.send_advertisement(&self, RadioChannel::AdvertisingChannel39);
                     }
 
@@ -557,6 +566,7 @@ where
             0 => self
                 .app
                 .enter(appid, |app, _| {
+                    debug!("*** 0 command");
                     if let Some(BLEState::Initialized) = app.process_status {
                         let pdu_type = data as AdvPduType;
                         match pdu_type {
@@ -582,6 +592,7 @@ where
                 .app
                 .enter(appid, |app, _| match app.process_status {
                     Some(BLEState::AdvertisingIdle) | Some(BLEState::ScanningIdle) => {
+                        debug!("*** 1 command");
                         app.process_status = Some(BLEState::Initialized);
                         ReturnCode::SUCCESS
                     }
@@ -599,6 +610,7 @@ where
             2 => {
                 self.app
                     .enter(appid, |app, _| {
+                        debug!("*** 2 command");
                         if app.process_status != Some(BLEState::ScanningIdle)
                             && app.process_status != Some(BLEState::AdvertisingIdle)
                         {
@@ -624,6 +636,7 @@ where
             5 => self
                 .app
                 .enter(appid, |app, _| {
+                    debug!("*** 5 command");
                     if let Some(BLEState::Initialized) = app.process_status {
                         app.process_status = Some(BLEState::ScanningIdle);
                         app.set_next_alarm::<A::Frequency>(self.alarm.now());

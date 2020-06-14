@@ -7,6 +7,7 @@ use kernel::common::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
 };
 use kernel::common::StaticRef;
+use kernel::debug;
 use kernel::hil::ble_advertising;
 use kernel::hil::ble_advertising::RadioChannel;
 
@@ -285,6 +286,8 @@ impl Ble {
 
         regs.clkcfg.write(CLKCFG::CLK32KEN::SET);
         regs.bledbg.write(BLEDBG::DBGDATA.val(1 << 14));
+
+        debug!("regs.clkcfg.get(): 0x{:x}", regs.clkcfg.get());
     }
 
     pub fn power_up(&self) {
@@ -293,6 +296,8 @@ impl Ble {
         regs.blecfg.write(BLECFG::PWRSMEN::SET);
 
         while regs.bstatus.read(BSTATUS::PWRST) != 3 {}
+
+        debug!("Power status: {:?}", regs.bstatus.read(BSTATUS::PWRST));
     }
 
     pub fn ble_initialise(&self) {
@@ -317,7 +322,58 @@ impl Ble {
         // Disable command queue
         regs.cqcfg.modify(CQCFG::CQEN::CLEAR);
 
+        debug!(
+            "Startup state is: {:?}",
+            regs.bstatus.read(BSTATUS::B2MSTATE)
+        );
+
         // TODO: Apply the BLE patch
+    }
+
+    pub fn print_status(&self) {
+        let regs = self.registers;
+
+        debug!("status: 0x{:x}", regs.status.get());
+    }
+
+    pub fn dump_registers(&self) {
+        let regs = self.registers;
+
+        // debug!("fifo: 0x{:x}", regs.fifo.get());
+        // debug!("fifoptr: 0x{:x}", regs.fifoptr.get());
+        // debug!("fifothr: 0x{:x}", regs.fifothr.get());
+        // debug!("fifopop: 0x{:x}", regs.fifopop.get());
+        // debug!("fifopush: 0x{:x}", regs.fifopush.get());
+        // debug!("fifoctrl: 0x{:x}", regs.fifoctrl.get());
+        // debug!("fifoloc: 0x{:x}", regs.fifoloc.get());
+        // debug!("clkcfg: 0x{:x}", regs.clkcfg.get());
+        debug!("cmd: 0x{:x}", regs.cmd.get());
+        // debug!("cmdrpt: 0x{:x}", regs.cmdrpt.get());
+        // debug!("offsethi: 0x{:x}", regs.offsethi.get());
+        debug!("cmdstat: 0x{:x}", regs.cmdstat.get());
+        debug!("inten: 0x{:x}", regs.inten.get());
+        debug!("intstat: 0x{:x}", regs.intstat.get());
+        // debug!("intclr: 0x{:x}", regs.intclr.get());
+        // debug!("intset: 0x{:x}", regs.intset.get());
+        // debug!("dmatrigen: 0x{:x}", regs.dmatrigen.get());
+        // debug!("dmatrigstat: 0x{:x}", regs.dmatrigstat.get());
+        // debug!("dmacfg: 0x{:x}", regs.dmacfg.get());
+        // debug!("dmatocount: 0x{:x}", regs.dmatocount.get());
+        // debug!("dmatargaddr: 0x{:x}", regs.dmatargaddr.get());
+        // debug!("dmastat: 0x{:x}", regs.dmastat.get());
+        // debug!("cqcfg: 0x{:x}", regs.cqcfg.get());
+        // debug!("cqaddr: 0x{:x}", regs.cqaddr.get());
+        // debug!("cqstat: 0x{:x}", regs.cqstat.get());
+        // debug!("cqflags: 0x{:x}", regs.cqflags.get());
+        // debug!("cqpauseen: 0x{:x}", regs.cqpauseen.get());
+        // debug!("cqcuridx: 0x{:x}", regs.cqcuridx.get());
+        // debug!("cqendidx: 0x{:x}", regs.cqendidx.get());
+        debug!("status: 0x{:x}", regs.status.get());
+        // debug!("mspicfg: 0x{:x}", regs.mspicfg.get());
+        // debug!("blecfg: 0x{:x}", regs.blecfg.get());
+        // debug!("pwrcmd: 0x{:x}", regs.pwrcmd.get());
+        debug!("bstatus: 0x{:x}", regs.bstatus.get());
+        debug!("bledbg: 0x{:x}", regs.bledbg.get());
     }
 
     fn reset_fifo(&self) {
@@ -361,8 +417,28 @@ impl Ble {
         let regs = self.registers;
         let irqs = regs.intstat.extract();
 
+        let debug_irqs = regs.intstat.get();
+        debug!("BLE IRQ: 0x{:x}", debug_irqs);
+        // debug!(
+        //     "** len: {:?}, idx: {}",
+        //     self.write_len.get(),
+        //     self.write_index.get()
+        // );
+
         // Disable and clear interrupts
         self.disable_interrupts();
+
+        if irqs.is_set(INT::B2MST) {
+            debug!(
+                "Changing state to: {:?}",
+                regs.bstatus.read(BSTATUS::B2MSTATE)
+            );
+        }
+
+        if irqs.is_set(INT::THR) {
+            debug!("FIFO THR interrupt");
+            // self.enable_interrupts();
+        }
 
         if irqs.is_set(INT::BLECSSTAT) || irqs.is_set(INT::B2MST) {
             // Enable interrupts
@@ -378,10 +454,17 @@ impl Ble {
 
             // If we have data, send it
             if self.buffer.is_some() {
+                debug!("Sending the data");
                 // Send the data
                 self.send_data();
             }
         }
+
+        // debug!(
+        //     "   len: {:?}, idx: {}",
+        //     self.write_len.get(),
+        //     self.write_index.get()
+        // );
 
         if irqs.is_set(INT::DCMP) {
             // Disable and clear DMA
@@ -395,6 +478,8 @@ impl Ble {
 
             if self.buffer.is_some() {
                 self.tx_client.map(|client| {
+                    debug!("Calling TX client len: {:?}", self.write_len.get(),);
+                    // while regs.bstatus.is_set(BSTATUS::SPISTATUS) {}
                     client.transmit_event(self.buffer.take().unwrap(), kernel::ReturnCode::SUCCESS);
                 });
             }
@@ -404,6 +489,7 @@ impl Ble {
 
         if irqs.is_set(INT::BLECIRQ) {
             self.rx_client.map(|client| {
+                debug!("Calling RX client");
                 regs.cmd.modify(CMD::TSIZE.val(0) + CMD::CMD::READ);
 
                 unsafe {
@@ -412,6 +498,8 @@ impl Ble {
                     while regs.fifoptr.read(FIFOPTR::FIFO1SIZ) > 0 && i < 40 {
                         let temp = regs.fifopop.get().to_ne_bytes();
 
+                        debug!("read: {:?}", temp);
+
                         PAYLOAD[i + 0] = temp[0];
                         PAYLOAD[i + 1] = temp[1];
                         PAYLOAD[i + 2] = temp[2];
@@ -419,6 +507,8 @@ impl Ble {
 
                         i = i + 4;
                     }
+
+                    debug!("i: {}", i);
 
                     client.receive_event(&mut PAYLOAD, 10, kernel::ReturnCode::SUCCESS);
                 }
@@ -454,6 +544,8 @@ impl ble_advertising::BleAdvertisementDriver for Ble {
     fn transmit_advertisement(&self, buf: &'static mut [u8], len: usize, _channel: RadioChannel) {
         let regs = &*self.registers;
 
+        debug!("transmit_advertisement: {}: 0x{:x?}", len, buf);
+
         let res = self.replace_radio_buffer(buf);
 
         // Setup all of the buffers
@@ -467,6 +559,8 @@ impl ble_advertising::BleAdvertisementDriver for Ble {
 
         // Wakeup BLE
         regs.blecfg.modify(BLECFG::WAKEUPCTL::ON);
+
+        // self.dump_registers();
 
         // See if we can send the data
         if regs.bstatus.is_set(BSTATUS::SPISTATUS) {
