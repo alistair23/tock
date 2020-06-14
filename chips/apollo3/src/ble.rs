@@ -267,6 +267,45 @@ pub struct Ble<'a> {
     read_index: Cell<usize>,
 }
 
+#[repr(C)]
+pub struct opaque {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct function_pointer {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct function_pointer_cont {
+    _private: [u8; 0],
+}
+
+extern "C" {
+    fn init_struct() -> *mut opaque;
+    fn am_hal_ble_initialize(ui32Module: u32, ppHandle: *mut *mut opaque);
+    fn am_hal_ble_boot(ppHandle: *mut opaque) -> u32;
+    fn am_hal_ble_default_trim_set_ramcode(ppHandle: *mut opaque);
+    fn am_hal_ble_default_patch_apply(ppHandle: *mut opaque);
+    fn am_hal_ble_patch_complete(ppHandle: *mut opaque);
+    fn am_hal_ble_tx_power_set(ppHandle: *mut opaque, ui32TxPower: u8) -> u32;
+    fn am_hal_ble_blocking_hci_write(
+        ppHandle: *mut opaque,
+        ui8Type: u8,
+        pui32Data: *const u32,
+        ui32NumBytes: u32,
+    ) -> u32;
+    fn am_hal_ble_nonblocking_hci_write(
+        pHandle: *mut opaque,
+        ui8Type: u8,
+        pui32Data: *const u32,
+        ui32NumBytes: u32,
+        am_hal_ble_transfer_complete_cb_t: *const function_pointer,
+        pvContext: *const function_pointer_cont,
+    ) -> u32;
+}
+
 impl<'a> Ble<'a> {
     pub const fn new(base: StaticRef<BleRegisters>) -> Self {
         Self {
@@ -317,7 +356,18 @@ impl<'a> Ble<'a> {
         // Disable command queue
         regs.cqcfg.modify(CQCFG::CQEN::CLEAR);
 
-        // TODO: Apply the BLE patch
+        self.disable_interrupts();
+
+        unsafe {
+            let mut ble_void = init_struct();
+            am_hal_ble_initialize(0, &mut ble_void);
+            am_hal_ble_default_trim_set_ramcode(ble_void);
+            am_hal_ble_default_patch_apply(ble_void);
+            am_hal_ble_patch_complete(ble_void);
+            am_hal_ble_tx_power_set(ble_void, 0x8);
+        }
+
+        self.disable_interrupts();
     }
 
     fn reset_fifo(&self) {
