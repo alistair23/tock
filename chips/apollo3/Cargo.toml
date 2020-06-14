@@ -9,3 +9,8 @@ cortexm4 = { path = "../../arch/cortex-m4" }
 enum_primitive = { path = "../../libraries/enum_primitive" }
 kernel = { path = "../../kernel" }
 tock-rt0 = { path = "../../libraries/tock-rt0" }
+
+[build-dependencies]
+cc = "1.0"
+
+#[link_args = “-L -l/scratch/alistair/software/mbed/AmbiqSuiteSDK/boards/apollo3_evb/examples/uart_ble_bridge/../../../../mcu/apollo3/hal/gcc/bin/libam_hal.a”]

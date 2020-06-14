@@ -9,3 +9,5 @@ lowrisc = { path = "../lowrisc" }
 rv32i = { path = "../../arch/rv32i" }
 kernel = { path = "../../kernel" }
 
+[build-dependencies]
+cc = "1.0"

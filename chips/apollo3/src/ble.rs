@@ -268,6 +268,20 @@ pub struct Ble {
     read_index: Cell<usize>,
 }
 
+#[repr(C)]
+pub struct opaque {
+    _private: [u8; 0],
+}
+
+extern "C" {
+    fn init_struct() -> *mut opaque;
+    fn am_hal_ble_initialize(ui32Module: u32, ppHandle: *mut *mut opaque);
+    fn am_hal_ble_boot(ppHandle: *mut opaque) -> u32;
+    fn am_hal_ble_default_trim_set_ramcode(ppHandle: *mut opaque);
+    fn am_hal_ble_default_patch_apply(ppHandle: *mut opaque);
+    fn am_hal_ble_patch_complete(ppHandle: *mut opaque);
+}
+
 impl Ble {
     pub const fn new(base: StaticRef<BleRegisters>) -> Self {
         Self {
@@ -327,7 +341,17 @@ impl Ble {
             regs.bstatus.read(BSTATUS::B2MSTATE)
         );
 
-        // TODO: Apply the BLE patch
+        self.disable_interrupts();
+
+        unsafe {
+            let mut ble_void = init_struct();
+            am_hal_ble_initialize(0, &mut ble_void);
+            am_hal_ble_default_trim_set_ramcode(ble_void);
+            am_hal_ble_default_patch_apply(ble_void);
+            am_hal_ble_patch_complete(ble_void);
+        }
+
+        self.disable_interrupts();
     }
 
     pub fn print_status(&self) {
