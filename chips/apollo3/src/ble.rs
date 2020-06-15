@@ -280,6 +280,7 @@ extern "C" {
     fn am_hal_ble_default_trim_set_ramcode(ppHandle: *mut opaque);
     fn am_hal_ble_default_patch_apply(ppHandle: *mut opaque);
     fn am_hal_ble_patch_complete(ppHandle: *mut opaque);
+    fn am_hal_ble_tx_power_set(ppHandle: *mut opaque, ui32TxPower: u8) -> u32;
 }
 
 impl Ble {
@@ -341,17 +342,20 @@ impl Ble {
             regs.bstatus.read(BSTATUS::B2MSTATE)
         );
 
-        self.disable_interrupts();
-
         unsafe {
             let mut ble_void = init_struct();
             am_hal_ble_initialize(0, &mut ble_void);
             am_hal_ble_default_trim_set_ramcode(ble_void);
             am_hal_ble_default_patch_apply(ble_void);
             am_hal_ble_patch_complete(ble_void);
+            am_hal_ble_tx_power_set(ble_void, 0x8);
         }
 
+        // Clear interrupts
         self.disable_interrupts();
+
+        // Enable interrupts
+        self.enable_interrupts();
     }
 
     pub fn print_status(&self) {
@@ -442,100 +446,13 @@ impl Ble {
         let irqs = regs.intstat.extract();
 
         let debug_irqs = regs.intstat.get();
-        debug!("BLE IRQ: 0x{:x}", debug_irqs);
-        // debug!(
-        //     "** len: {:?}, idx: {}",
-        //     self.write_len.get(),
-        //     self.write_index.get()
-        // );
+        debug!("Tock BLE IRQ: 0x{:x}", debug_irqs);
 
-        // Disable and clear interrupts
-        self.disable_interrupts();
+        regs.inten.set(0x00);
 
-        if irqs.is_set(INT::B2MST) {
-            debug!(
-                "Changing state to: {:?}",
-                regs.bstatus.read(BSTATUS::B2MSTATE)
-            );
-        }
-
-        if irqs.is_set(INT::THR) {
-            debug!("FIFO THR interrupt");
-            // self.enable_interrupts();
-        }
-
-        if irqs.is_set(INT::BLECSSTAT) || irqs.is_set(INT::B2MST) {
-            // Enable interrupts
-            self.enable_interrupts();
-
-            if regs.bstatus.is_set(BSTATUS::BLEIRQ) {
-                panic!("Read requested while trying to write");
-            }
-
-            if !regs.bstatus.is_set(BSTATUS::SPISTATUS) {
-                panic!("SPI not ready");
-            }
-
-            // If we have data, send it
-            if self.buffer.is_some() {
-                debug!("Sending the data");
-                // Send the data
-                self.send_data();
-            }
-        }
-
-        // debug!(
-        //     "   len: {:?}, idx: {}",
-        //     self.write_len.get(),
-        //     self.write_index.get()
-        // );
-
-        if irqs.is_set(INT::DCMP) {
-            // Disable and clear DMA
-            regs.dmacfg.set(0x00000000);
-
-            // Disable the wake controller
-            regs.blecfg.modify(BLECFG::WAKEUPCTL::OFF);
-
-            // Reset FIFOs
-            self.reset_fifo();
-
-            if self.buffer.is_some() {
-                self.tx_client.map(|client| {
-                    debug!("Calling TX client len: {:?}", self.write_len.get(),);
-                    // while regs.bstatus.is_set(BSTATUS::SPISTATUS) {}
-                    client.transmit_event(self.buffer.take().unwrap(), kernel::ReturnCode::SUCCESS);
-                });
-            }
-
-            self.enable_interrupts();
-        }
-
-        if irqs.is_set(INT::BLECIRQ) {
-            self.rx_client.map(|client| {
-                debug!("Calling RX client");
-                regs.cmd.modify(CMD::TSIZE.val(0) + CMD::CMD::READ);
-
-                unsafe {
-                    let mut i = 0;
-
-                    while regs.fifoptr.read(FIFOPTR::FIFO1SIZ) > 0 && i < 40 {
-                        let temp = regs.fifopop.get().to_ne_bytes();
-
-                        debug!("read: {:?}", temp);
-
-                        PAYLOAD[i + 0] = temp[0];
-                        PAYLOAD[i + 1] = temp[1];
-                        PAYLOAD[i + 2] = temp[2];
-                        PAYLOAD[i + 3] = temp[3];
-
-                        i = i + 4;
-                    }
-
-                    debug!("i: {}", i);
-
-                    client.receive_event(&mut PAYLOAD, 10, kernel::ReturnCode::SUCCESS);
-                }
+        unsafe {
+            self.tx_client.map(|client| {
+                client.transmit_event(&mut PAYLOAD, kernel::ReturnCode::SUCCESS);
             });
         }
     }
@@ -543,7 +460,8 @@ impl Ble {
     pub fn enable_interrupts(&self) {
         let regs = &*self.registers;
 
-        regs.inten.set(0x18381);
+        regs.inten
+            .write(INT::CMDCMP::SET + INT::DCMP::SET + INT::BLECIRQ::SET + INT::BLECSSTAT::SET);
     }
 
     pub fn disable_interrupts(&self) {

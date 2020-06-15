@@ -512,38 +512,14 @@ where
 {
     // The ReturnCode indicates valid CRC or not, not used yet but could be used for
     // re-transmissions for invalid CRCs
-    fn transmit_event(&self, buf: &'static mut [u8], _crc_ok: ReturnCode) {
-        self.kernel_tx.replace(buf);
-        self.sending_app.map(|appid| {
+    fn transmit_event(&self, _buf: &'static mut [u8], _crc_ok: ReturnCode) {
+
+        self.receiving_app.map(|appid| {
             let _ = self.app.enter(*appid, |app, _| {
-                match app.process_status {
-                    Some(BLEState::Advertising(RadioChannel::AdvertisingChannel37)) => {
-                        app.process_status =
-                            Some(BLEState::Advertising(RadioChannel::AdvertisingChannel38));
-                        self.sending_app.set(app.appid());
-                        self.radio.set_tx_power(app.tx_power);
-                        debug!("Channel37");
-                        app.send_advertisement(&self, RadioChannel::AdvertisingChannel38);
-                    }
-
-                    Some(BLEState::Advertising(RadioChannel::AdvertisingChannel38)) => {
-                        app.process_status =
-                            Some(BLEState::Advertising(RadioChannel::AdvertisingChannel39));
-                        self.sending_app.set(app.appid());
-                        debug!("Channel38");
-                        app.send_advertisement(&self, RadioChannel::AdvertisingChannel39);
-                    }
-
-                    Some(BLEState::Advertising(RadioChannel::AdvertisingChannel39)) => {
-                        self.busy.set(false);
-                        app.process_status = Some(BLEState::AdvertisingIdle);
-                        app.set_next_alarm::<A::Frequency>(self.alarm.now());
-                    }
-                    // Invalid state => don't care
-                    _ => (),
-                }
+                app.scan_callback.map(|mut cb| {
+                    cb.schedule(0, 0, 0);
+                });
             });
-            self.reset_active_alarm();
         });
     }
 }
@@ -703,6 +679,8 @@ where
                 .app
                 .enter(app_id, |app, _| match app.process_status {
                     Some(BLEState::NotInitialized) | Some(BLEState::Initialized) => {
+                        debug!("Running subscribe");
+                        self.receiving_app.set(app_id);
                         app.scan_callback = callback;
                         ReturnCode::SUCCESS
                     }

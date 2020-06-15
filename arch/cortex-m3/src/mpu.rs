@@ -364,12 +364,6 @@ impl kernel::mpu::MPU for MPU {
     type MpuConfig = CortexMConfig;
 
     fn enable_mpu(&self) {
-        let regs = &*self.registers;
-
-        // Enable the MPU, disable it during HardFault/NMI handlers, and allow
-        // privileged code access to all unprotected memory.
-        regs.ctrl
-            .write(Control::ENABLE::SET + Control::HFNMIENA::CLEAR + Control::PRIVDEFENA::SET);
     }
 
     fn disable_mpu(&self) {
@@ -676,19 +670,6 @@ impl kernel::mpu::MPU for MPU {
         Ok(())
     }
 
-    fn configure_mpu(&self, config: &Self::MpuConfig, app_id: &AppId) {
-        // If the hardware is already configured for this app and the app's MPU
-        // configuration has not changed, then skip the hardware update.
-        if !self.hardware_is_configured_for.contains(app_id) || config.is_dirty.get() {
-            let regs = &*self.registers;
-
-            // Set MPU regions
-            for region in config.regions.iter() {
-                regs.rbar.write(region.base_address());
-                regs.rasr.write(region.attributes());
-            }
-            self.hardware_is_configured_for.set(*app_id);
-            config.is_dirty.set(false);
-        }
+    fn configure_mpu(&self, _config: &Self::MpuConfig, _app_id: &AppId) {
     }
 }

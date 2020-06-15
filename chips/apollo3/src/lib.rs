@@ -90,7 +90,7 @@ pub unsafe fn init() {
     tock_rt0::zero_bss(&mut _szero, &mut _ezero);
 
     // Enable the cache controller
-    *(0x40018000i32 as *mut u32) = 1 | (1 << 10) | (1 << 20);
+    *(0x40018000i32 as *mut u32) = 1 | (1 << 10) | (1 << 20) | (1 << 8) | (1 << 9);
 
     // Explicitly tell the core where Tock's vector table is located. If Tock is the
     // only thing on the chip then this is effectively a no-op. If, however, there is
