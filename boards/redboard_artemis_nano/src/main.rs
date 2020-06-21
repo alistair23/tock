@@ -57,7 +57,6 @@ struct RedboardArtemisNano {
     ble_radio: &'static capsules::ble_advertising_driver::BLE<
         'static,
         apollo3::ble::Ble,
-        VirtualMuxAlarm<'static, apollo3::stimer::STimer<'static>>,
     >,
 }
 
@@ -195,7 +194,7 @@ pub unsafe fn reset_handler() {
     apollo3::ble::BLE.ble_initialise();
 
     let ble_radio =
-        ble::BLEComponent::new(board_kernel, &apollo3::ble::BLE, mux_alarm).finalize(());
+        ble::BLEComponent::new(board_kernel, &apollo3::ble::BLE).finalize(());
 
     apollo3::mcuctrl::MCUCTRL.print_chip_revision();
 

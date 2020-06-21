@@ -19,8 +19,6 @@ use kernel::{create_capability, static_init};
 pub struct BLEComponent {
     board_kernel: &'static kernel::Kernel,
     radio: &'static apollo3::ble::Ble,
-    mux_alarm:
-        &'static capsules::virtual_alarm::MuxAlarm<'static, apollo3::stimer::STimer<'static>>,
 }
 
 /// BLE component for Apollo3 BLE
@@ -29,12 +27,10 @@ impl BLEComponent {
     pub fn new(
         board_kernel: &'static kernel::Kernel,
         radio: &'static apollo3::ble::Ble,
-        mux_alarm: &'static capsules::virtual_alarm::MuxAlarm<'static, apollo3::stimer::STimer>,
     ) -> BLEComponent {
         BLEComponent {
             board_kernel: board_kernel,
             radio: radio,
-            mux_alarm: mux_alarm,
         }
     }
 }
@@ -44,28 +40,20 @@ impl Component for BLEComponent {
     type Output = &'static capsules::ble_advertising_driver::BLE<
         'static,
         apollo3::ble::Ble,
-        VirtualMuxAlarm<'static, apollo3::stimer::STimer<'static>>,
     >;
 
     unsafe fn finalize(self, _s: Self::StaticInput) -> Self::Output {
         let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
 
-        let ble_radio_virtual_alarm = static_init!(
-            capsules::virtual_alarm::VirtualMuxAlarm<'static, apollo3::stimer::STimer>,
-            capsules::virtual_alarm::VirtualMuxAlarm::new(self.mux_alarm)
-        );
-
         let ble_radio = static_init!(
             capsules::ble_advertising_driver::BLE<
                 'static,
                 apollo3::ble::Ble,
-                VirtualMuxAlarm<'static, apollo3::stimer::STimer>,
             >,
             capsules::ble_advertising_driver::BLE::new(
                 self.radio,
                 self.board_kernel.create_grant(&grant_cap),
-                &mut capsules::ble_advertising_driver::BUF,
-                ble_radio_virtual_alarm
+                &mut capsules::ble_advertising_driver::BUF
             )
         );
         kernel::hil::ble_advertising::BleAdvertisementDriver::set_receive_client(
@@ -74,7 +62,6 @@ impl Component for BLEComponent {
         kernel::hil::ble_advertising::BleAdvertisementDriver::set_transmit_client(
             self.radio, ble_radio,
         );
-        hil::time::Alarm::set_client(ble_radio_virtual_alarm, ble_radio);
 
         ble_radio
     }
