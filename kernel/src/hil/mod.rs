@@ -17,6 +17,7 @@ pub mod log;
 pub mod nonvolatile_storage;
 pub mod pwm;
 pub mod radio;
+pub mod raw_ble;
 pub mod rng;
 pub mod screen;
 pub mod sensors;
