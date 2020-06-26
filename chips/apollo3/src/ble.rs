@@ -11,8 +11,8 @@ use kernel::common::registers::{
 use kernel::common::StaticRef;
 use kernel::debug;
 use kernel::hil::raw_ble;
-use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
 use kernel::hil::raw_ble::InterruptCause;
+use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
 
 pub static mut BLE: Ble = Ble::new(BLE_BASE);
 
@@ -306,6 +306,11 @@ extern "C" {
         ui32NumBytes: u32,
         am_hal_ble_transfer_complete_cb_t: *const function_pointer,
         pvContext: *const function_pointer_cont,
+    ) -> u32;
+    fn am_hal_ble_blocking_hci_read(
+        pHandle: *mut opaque,
+        pui32Data: *const u32,
+        pui32BytesReceived: *mut u32,
     ) -> u32;
 }
 
@@ -607,7 +612,7 @@ impl<'a> Ble<'a> {
 
             // Call the interrupt client
             self.client.map(|client| {
-                client.interrupt(Ok((cause)), self.buffer.take());
+                client.interrupt(Ok((cause)));
             });
         }
     }
@@ -647,15 +652,74 @@ impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
     fn read(
         &self,
         data: LeasableBuffer<'static, u8>,
-    ) -> Result<usize, (ReturnCode, &'static mut [u8])> {
-        Ok(data.len())
+    ) -> Result<(), (ReturnCode, &'static mut [u8])> {
+        let len = data.len();
+        let mut num_bytes = 0;
+
+        debug!("reading");
+
+        // Setup all of the buffers
+        self.buffer.replace(data.take());
+        self.read_len.set(len as usize);
+        self.write_len.set(0);
+        self.read_index.set(0);
+
+        // debug!("Enable IRQs");
+        // self.enable_interrupts();
+
+        unsafe {
+            let mut ble_void = init_struct();
+            am_hal_ble_initialize(0, &mut ble_void);
+            let ret = am_hal_ble_blocking_hci_read(
+                ble_void,
+                PAYLOAD.as_ptr() as *const u32,
+                &mut num_bytes,
+            );
+            debug!(
+                "read ret: {}, {:?} with 0x{:x} bytes",
+                ret, ret as i32, num_bytes
+            );
+        }
+
+        let buf = self.buffer.take().unwrap();
+
+        for i in 0..num_bytes {
+            unsafe {
+                buf[i as usize] = PAYLOAD[i as usize];
+            }
+            debug!("read: 0x{:x}", buf[i as usize]);
+        }
+
+        self.buffer.replace(buf);
+
+        // //
+        // // If the read succeeded, we need to wait for the IRQ signal to
+        // // go back down. If we don't we might inadvertently try to read
+        // // the same packet twice.
+        // //
+        // uint32_t ui32IRQRetries;
+        // for (ui32IRQRetries = 0; ui32IRQRetries < HCI_DRV_MAX_IRQ_TIMEOUT; ui32IRQRetries++)
+        // {
+        //     if (BLE_IRQ_CHECK() == 0 || g_ui32InterruptsSeen != ui32OldInterruptsSeen)
+        //     {
+        //         break;
+        //     }
+
+        //     am_util_delay_us(1);
+        // }
+
+        self.client.map(|client| {
+            client.read_complete(Ok(num_bytes as usize), self.buffer.take());
+        });
+
+        Ok(())
     }
 
     fn write(
         &self,
         data: LeasableBuffer<'static, u8>,
     ) -> Result<usize, (ReturnCode, &'static mut [u8])> {
-        let regs = &*self.registers;
+        let regs = self.registers;
         let len = data.len();
 
         debug!(
@@ -735,6 +799,10 @@ impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
         // self.enable_interrupts();
 
         debug!("Finished sending");
+
+        self.client.map(|client| {
+            client.write_complete(Ok((len)), self.buffer.take());
+        });
 
         Ok(len)
     }

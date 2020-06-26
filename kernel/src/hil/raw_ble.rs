@@ -64,7 +64,7 @@ pub trait RawBleDriver<'a> {
     fn read(
         &self,
         data: LeasableBuffer<'static, u8>,
-    ) -> Result<usize, (ReturnCode, &'static mut [u8])>;
+    ) -> Result<(), (ReturnCode, &'static mut [u8])>;
 
     /// Write data to the BLE device from the `data` buffer.
     /// On error the return value will contain a return code and the original
@@ -81,9 +81,9 @@ pub trait Client<'a> {
     /// data supplied to `read()` or `write()`.
     /// On success the InterruptCause struct will contain information as to why
     /// and interrupt occured.
-    fn interrupt(
-        &'a self,
-        result: Result<InterruptCause, ReturnCode>,
-        data: Option<&'static mut [u8]>,
-    );
+    fn interrupt(&'a self, result: Result<InterruptCause, ReturnCode>);
+
+    fn read_complete(&'a self, result: Result<usize, ReturnCode>, data: Option<&'static mut [u8]>);
+
+    fn write_complete(&'a self, result: Result<usize, ReturnCode>, data: Option<&'static mut [u8]>);
 }

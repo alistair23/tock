@@ -8,10 +8,10 @@
 use core::cell::Cell;
 use kernel::common::cells::{OptionalCell, TakeCell};
 use kernel::common::leasable_buffer::LeasableBuffer;
+use kernel::debug;
 use kernel::hil::raw_ble;
 use kernel::hil::raw_ble::InterruptCause;
 use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
-use kernel::debug;
 
 /// Syscall driver number.
 use crate::driver;
@@ -63,18 +63,23 @@ impl<'a, B> raw_ble::Client<'a> for BLE<'a, B>
 where
     B: raw_ble::RawBleDriver<'a>,
 {
-    fn interrupt(
-        &'a self,
-        result: Result<InterruptCause, ReturnCode>,
-        data: Option<&'static mut [u8]>,
-    ) {
+    fn interrupt(&'a self, result: Result<InterruptCause, ReturnCode>) {
+        if let Ok(res) = result {
+            self.appid.map(|appid| {
+                let _ = self.app.enter(*appid, |app, _| {
+                    app.irq_callback.map(|cb| {
+                        debug!("irq Callback: {:?}", cb);
+                        cb.schedule(res.into(), 0, 0);
+                    });
+                });
+            });
+        }
+    }
+
+    fn read_complete(&'a self, result: Result<usize, ReturnCode>, data: Option<&'static mut [u8]>) {
         match data {
             Some(d) => {
-                if self.last_op.get() == LastOperation::Read {
-                    self.read.replace(d);
-                } else if self.last_op.get() == LastOperation::Write {
-                    self.write.replace(d);
-                }
+                self.read.replace(d);
             }
             _ => {}
         }
@@ -82,8 +87,49 @@ where
         if let Ok(res) = result {
             self.appid.map(|appid| {
                 let _ = self.app.enter(*appid, |app, _| {
-                    app.callback.map(|cb| {
-                        debug!("Callback: {:?}", cb);
+                    match self.read.take() {
+                        Some(d) => {
+                            self.appid.map(|appid| {
+                                let _ = self.app.enter(*appid, |app, _| {
+                                    match app.read.as_mut() {
+                                        Some(dest) => {
+                                            dest.as_mut()[..res].copy_from_slice(d[..res].as_ref());
+                                        }
+                                        None => {}
+                                    };
+                                });
+                            });
+                            self.read.replace(d);
+                        }
+                        _ => {}
+                    }
+
+                    app.read_callback.map(|cb| {
+                        debug!("read Callback: {:?}", cb);
+                        cb.schedule(res.into(), 0, 0);
+                    });
+                });
+            });
+        }
+    }
+
+    fn write_complete(
+        &'a self,
+        result: Result<usize, ReturnCode>,
+        data: Option<&'static mut [u8]>,
+    ) {
+        match data {
+            Some(d) => {
+                self.write.replace(d);
+            }
+            _ => {}
+        }
+
+        if let Ok(res) = result {
+            self.appid.map(|appid| {
+                let _ = self.app.enter(*appid, |app, _| {
+                    app.write_callback.map(|cb| {
+                        debug!("write Callback: {:?}", cb);
                         cb.schedule(res.into(), 0, 0);
                     });
                 });
@@ -129,19 +175,50 @@ where
 
         match command_num {
             // Start read command
-            0 => {
-                self.last_op.set(LastOperation::Read);
-                self.appid.set(appid);
-                if let Err(e) = self
-                    .radio
-                    .read(LeasableBuffer::new(self.read.take().unwrap()))
-                {
-                    self.read.replace(e.1);
-                    self.last_op.set(LastOperation::NoOp);
-                    return e.0;
-                }
-                ReturnCode::SUCCESS
-            }
+            0 => self
+                .app
+                .enter(appid, |app, _| {
+                    match app.read.as_ref() {
+                        Some(d) => {
+                            debug!("Reading command");
+                            let mut copy_len = 0;
+                            self.read.map(|buf| {
+                                let data = d.as_ref();
+
+                                // Determine the size of the static buffer we have
+                                let static_buffer_len = buf.len();
+
+                                // If we have more data then the static buffer we set how much data we are going to copy
+                                if data.len() > static_buffer_len {
+                                    copy_len = static_buffer_len;
+                                } else {
+                                    copy_len = data.len();
+                                }
+
+                                // Copy the data into the static buffer
+                                buf[..copy_len].copy_from_slice(&data[..copy_len]);
+                            });
+
+                            let mut lease_buf = LeasableBuffer::new(self.read.take().unwrap());
+
+                            lease_buf.slice(..copy_len);
+
+                            self.last_op.set(LastOperation::Read);
+                            self.appid.set(appid);
+                            if let Err(e) = self.radio.read(lease_buf) {
+                                self.read.replace(e.1);
+                                self.last_op.set(LastOperation::NoOp);
+                                return e.0;
+                            }
+                        }
+                        None => {
+                            return ReturnCode::ERESERVE;
+                        }
+                    };
+
+                    ReturnCode::SUCCESS
+                })
+                .unwrap_or_else(|err| err.into()),
 
             // Start write command
             1 => self
@@ -203,6 +280,7 @@ where
             0 => self
                 .app
                 .enter(appid, |app, _| {
+                    debug!("Allowing a read buffer");
                     app.read = slice;
                     ReturnCode::SUCCESS
                 })
@@ -234,7 +312,25 @@ where
                 .app
                 .enter(appid, |app, _| {
                     self.appid.set(appid);
-                    app.callback.insert(callback);
+                    app.irq_callback.insert(callback);
+                    ReturnCode::SUCCESS
+                })
+                .unwrap_or_else(|err| err.into()),
+            // Callback for read
+            1 => self
+                .app
+                .enter(appid, |app, _| {
+                    self.appid.set(appid);
+                    app.read_callback.insert(callback);
+                    ReturnCode::SUCCESS
+                })
+                .unwrap_or_else(|err| err.into()),
+            // Callback for write
+            2 => self
+                .app
+                .enter(appid, |app, _| {
+                    self.appid.set(appid);
+                    app.write_callback.insert(callback);
                     ReturnCode::SUCCESS
                 })
                 .unwrap_or_else(|err| err.into()),
@@ -244,7 +340,9 @@ where
 }
 
 pub struct App {
-    callback: OptionalCell<Callback>,
+    irq_callback: OptionalCell<Callback>,
+    read_callback: OptionalCell<Callback>,
+    write_callback: OptionalCell<Callback>,
     read: Option<AppSlice<Shared, u8>>,
     write: Option<AppSlice<Shared, u8>>,
 }
@@ -252,7 +350,9 @@ pub struct App {
 impl Default for App {
     fn default() -> App {
         App {
-            callback: OptionalCell::empty(),
+            irq_callback: OptionalCell::empty(),
+            read_callback: OptionalCell::empty(),
+            write_callback: OptionalCell::empty(),
             read: None,
             write: None,
         }
