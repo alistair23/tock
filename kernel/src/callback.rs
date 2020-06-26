@@ -144,7 +144,7 @@ pub struct CallbackId {
 /// Type for calling a callback in a process.
 ///
 /// This is essentially a wrapper around a function pointer.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Callback {
     app_id: AppId,
     callback_id: CallbackId,

@@ -39,6 +39,7 @@ use core::slice::SliceIndex;
 
 /// Leasable Buffer which can be used to pass a section of a larger buffer but still
 /// get the entire buffer back in a callback
+#[derive(Debug)]
 pub struct LeasableBuffer<'a, T> {
     internal: &'a mut [T],
     active_range: Range<usize>,

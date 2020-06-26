@@ -324,6 +324,8 @@ impl<'a> Ble<'a> {
 
         regs.clkcfg.write(CLKCFG::CLK32KEN::SET);
         regs.bledbg.write(BLEDBG::DBGDATA.val(1 << 14));
+
+        debug!("regs.clkcfg.get(): 0x{:x}", regs.clkcfg.get());
     }
 
     pub fn power_up(&self) {
@@ -332,6 +334,8 @@ impl<'a> Ble<'a> {
         regs.blecfg.write(BLECFG::PWRSMEN::SET);
 
         while regs.bstatus.read(BSTATUS::PWRST) != 3 {}
+
+        debug!("Power status: {:?}", regs.bstatus.read(BSTATUS::PWRST));
     }
 
     pub fn ble_initialise(&self) {

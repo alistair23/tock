@@ -11,6 +11,7 @@ use kernel::common::leasable_buffer::LeasableBuffer;
 use kernel::hil::raw_ble;
 use kernel::hil::raw_ble::InterruptCause;
 use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
+use kernel::debug;
 
 /// Syscall driver number.
 use crate::driver;
@@ -82,6 +83,7 @@ where
             self.appid.map(|appid| {
                 let _ = self.app.enter(*appid, |app, _| {
                     app.callback.map(|cb| {
+                        debug!("Callback: {:?}", cb);
                         cb.schedule(res.into(), 0, 0);
                     });
                 });
