@@ -1,14 +1,18 @@
 //! BLE driver.
 
 use core::cell::Cell;
+use core::ptr;
 use kernel::common::cells::OptionalCell;
 use kernel::common::cells::TakeCell;
+use kernel::common::leasable_buffer::LeasableBuffer;
 use kernel::common::registers::{
     register_bitfields, register_structs, ReadOnly, ReadWrite, WriteOnly,
 };
 use kernel::common::StaticRef;
-use kernel::hil::ble_advertising;
-use kernel::hil::ble_advertising::RadioChannel;
+use kernel::debug;
+use kernel::hil::raw_ble;
+use kernel::{AppId, AppSlice, Callback, Driver, Grant, ReturnCode, Shared};
+use kernel::hil::raw_ble::InterruptCause;
 
 pub static mut BLE: Ble = Ble::new(BLE_BASE);
 
@@ -257,8 +261,7 @@ static mut PAYLOAD: [u8; 40] = [0x00; 40];
 
 pub struct Ble<'a> {
     registers: StaticRef<BleRegisters>,
-    rx_client: OptionalCell<&'a dyn ble_advertising::RxClient>,
-    tx_client: OptionalCell<&'a dyn ble_advertising::TxClient>,
+    client: OptionalCell<&'a dyn raw_ble::Client<'a>>,
 
     buffer: TakeCell<'static, [u8]>,
     write_len: Cell<usize>,
@@ -310,8 +313,7 @@ impl<'a> Ble<'a> {
     pub const fn new(base: StaticRef<BleRegisters>) -> Self {
         Self {
             registers: base,
-            rx_client: OptionalCell::empty(),
-            tx_client: OptionalCell::empty(),
+            client: OptionalCell::empty(),
             buffer: TakeCell::empty(),
             write_len: Cell::new(0),
             read_len: Cell::new(0),
@@ -324,8 +326,6 @@ impl<'a> Ble<'a> {
 
         regs.clkcfg.write(CLKCFG::CLK32KEN::SET);
         regs.bledbg.write(BLEDBG::DBGDATA.val(1 << 14));
-
-        debug!("regs.clkcfg.get(): 0x{:x}", regs.clkcfg.get());
     }
 
     pub fn power_up(&self) {
@@ -360,8 +360,6 @@ impl<'a> Ble<'a> {
         // Disable command queue
         regs.cqcfg.modify(CQCFG::CQEN::CLEAR);
 
-        self.disable_interrupts();
-
         unsafe {
             let mut ble_void = init_struct();
             am_hal_ble_initialize(0, &mut ble_void);
@@ -371,7 +369,51 @@ impl<'a> Ble<'a> {
             am_hal_ble_tx_power_set(ble_void, 0x8);
         }
 
+        // Clear interrupts
         self.disable_interrupts();
+
+        // Enable interrupts
+        self.enable_interrupts();
+    }
+
+    pub fn dump_registers(&self) {
+        let regs = self.registers;
+
+        // debug!("fifo: 0x{:x}", regs.fifo.get());
+        // debug!("fifoptr: 0x{:x}", regs.fifoptr.get());
+        // debug!("fifothr: 0x{:x}", regs.fifothr.get());
+        // debug!("fifopop: 0x{:x}", regs.fifopop.get());
+        // debug!("fifopush: 0x{:x}", regs.fifopush.get());
+        // debug!("fifoctrl: 0x{:x}", regs.fifoctrl.get());
+        // debug!("fifoloc: 0x{:x}", regs.fifoloc.get());
+        // debug!("clkcfg: 0x{:x}", regs.clkcfg.get());
+        debug!("cmd: 0x{:x}", regs.cmd.get());
+        // debug!("cmdrpt: 0x{:x}", regs.cmdrpt.get());
+        // debug!("offsethi: 0x{:x}", regs.offsethi.get());
+        debug!("cmdstat: 0x{:x}", regs.cmdstat.get());
+        debug!("inten: 0x{:x}", regs.inten.get());
+        debug!("intstat: 0x{:x}", regs.intstat.get());
+        // debug!("intclr: 0x{:x}", regs.intclr.get());
+        // debug!("intset: 0x{:x}", regs.intset.get());
+        // debug!("dmatrigen: 0x{:x}", regs.dmatrigen.get());
+        // debug!("dmatrigstat: 0x{:x}", regs.dmatrigstat.get());
+        // debug!("dmacfg: 0x{:x}", regs.dmacfg.get());
+        // debug!("dmatocount: 0x{:x}", regs.dmatocount.get());
+        // debug!("dmatargaddr: 0x{:x}", regs.dmatargaddr.get());
+        // debug!("dmastat: 0x{:x}", regs.dmastat.get());
+        // debug!("cqcfg: 0x{:x}", regs.cqcfg.get());
+        // debug!("cqaddr: 0x{:x}", regs.cqaddr.get());
+        // debug!("cqstat: 0x{:x}", regs.cqstat.get());
+        // debug!("cqflags: 0x{:x}", regs.cqflags.get());
+        // debug!("cqpauseen: 0x{:x}", regs.cqpauseen.get());
+        // debug!("cqcuridx: 0x{:x}", regs.cqcuridx.get());
+        // debug!("cqendidx: 0x{:x}", regs.cqendidx.get());
+        debug!("status: 0x{:x}", regs.status.get());
+        // debug!("mspicfg: 0x{:x}", regs.mspicfg.get());
+        // debug!("blecfg: 0x{:x}", regs.blecfg.get());
+        // debug!("pwrcmd: 0x{:x}", regs.pwrcmd.get());
+        debug!("bstatus: 0x{:x}", regs.bstatus.get());
+        debug!("bledbg: 0x{:x}", regs.bledbg.get());
     }
 
     fn reset_fifo(&self) {
@@ -381,63 +423,137 @@ impl<'a> Ble<'a> {
         regs.fifoctrl.modify(FIFOCTRL::FIFORSTN::SET);
     }
 
+    // fn send_data(&self) {
+    //     let regs = &*self.registers;
+
+    //     unsafe {
+    //         debug!("Sending data: {:x?}", PAYLOAD[0]);
+    //     }
+
+    //     // Set the FIFO levels
+    //     regs.fifothr
+    //         .write(FIFOTHR::FIFORTHR.val(16) + FIFOTHR::FIFOWTHR.val(16));
+
+    //     // Disable the FIFO
+    //     //regs.fifothr.write(FIFOTHR::FIFORTHR::CLEAR + FIFOTHR::FIFOWTHR::CLEAR);
+
+    //     // Setup the DMA
+    //     unsafe {
+    //         regs.dmatargaddr.set(PAYLOAD.as_ptr() as u32);
+    //     }
+    //     regs.dmatocount.set(self.write_len.get() as u32);
+    //     regs.dmatrigen.write(DMATRIGEN::DTHREN::SET);
+    //     regs.dmacfg
+    //         .write(DMACFG::DMADIR.val(1) + DMACFG::DMAPRI.val(1));
+
+    //     // Setup the operation
+    //     regs.cmd
+    //         .modify(CMD::TSIZE.val(self.write_len.get() as u32) + CMD::CMD::WRITE);
+
+    //     // Enable DMA
+    //     regs.dmacfg.modify(DMACFG::DMAEN::SET);
+
+    //     // Set the wake low
+    //     regs.blecfg.modify(BLECFG::WAKEUPCTL::OFF);
+    // }
+
     fn send_data(&self) {
-        let regs = &*self.registers;
+        let regs = self.registers;
+        let mut data_pushed = 0;
+        let len = self.write_len.get();
 
-        // Set the FIFO levels
-        regs.fifothr
-            .write(FIFOTHR::FIFORTHR.val(16) + FIFOTHR::FIFOWTHR.val(16));
-
-        // Disable the FIFO
-        //regs.fifothr.write(FIFOTHR::FIFORTHR::CLEAR + FIFOTHR::FIFOWTHR::CLEAR);
-
-        // Setup the DMA
         unsafe {
-            regs.dmatargaddr.set(PAYLOAD.as_ptr() as u32);
+            debug!("Sending data: {:x?}", PAYLOAD[0]);
         }
-        regs.dmatocount.set(self.write_len.get() as u32);
-        regs.dmatrigen.write(DMATRIGEN::DTHREN::SET);
-        regs.dmacfg
-            .write(DMACFG::DMADIR.val(1) + DMACFG::DMAPRI.val(1));
 
-        // Setup the operation
-        regs.cmd
-            .modify(CMD::TSIZE.val(self.write_len.get() as u32) + CMD::CMD::WRITE);
+        if data_pushed <= len {
+            self.buffer.map(|buf| {
+                // Push some data to FIFO
+                for i in (data_pushed / 4)..(len / 4) {
+                    let data_idx = i * 4;
 
-        // Enable DMA
-        regs.dmacfg.modify(DMACFG::DMAEN::SET);
+                    if regs.fifoptr.read(FIFOPTR::FIFO0REM) <= 4 {
+                        debug!("FULL");
+                        return;
+                    }
 
-        // Set the wake low
-        regs.blecfg.modify(BLECFG::WAKEUPCTL::OFF);
+                    let mut d = (buf[data_idx + 0] as u32) << 0;
+                    d |= (buf[data_idx + 1] as u32) << 8;
+                    d |= (buf[data_idx + 2] as u32) << 16;
+                    d |= (buf[data_idx + 3] as u32) << 24;
+
+                    debug!("Pushing 0x{:x?}", d);
+
+                    regs.fifopush.set(d);
+
+                    data_pushed = data_idx + 4;
+                }
+
+                // We never filled up the FIFO
+                if data_pushed > (len - 4) {
+                    // Check if we have any left over data
+                    if (len - data_pushed) == 1 {
+                        let d = buf[len as usize - 1] as u32;
+
+                        debug!("1 Sendinging 0x{:x?}", d);
+
+                        regs.fifopush.set(d);
+                    } else if (len - data_pushed) == 2 {
+                        let mut d = (buf[len as usize - 2] as u32) << 8;
+                        d |= (buf[len as usize - 1] as u32) << 0;
+
+                        debug!("2 Sendinging 0x{:x?}", d);
+
+                        regs.fifopush.set(d);
+                    } else if (len - data_pushed) == 3 {
+                        let mut d = (buf[len as usize - 3] as u32) << 16;
+                        d |= (buf[len as usize - 2] as u32) << 8;
+                        d |= (buf[len as usize - 1] as u32) << 0;
+
+                        debug!("3 Sendinging 0x{:x?}", d);
+
+                        regs.fifopush.set(d);
+                    }
+                }
+            });
+        }
     }
 
     pub fn handle_interrupt(&self) {
         let regs = self.registers;
         let irqs = regs.intstat.extract();
 
+        let debug_irqs = regs.intstat.get();
+        debug!("Tock BLE IRQ: 0x{:x}", debug_irqs);
+
         // Disable and clear interrupts
         self.disable_interrupts();
 
-        if irqs.is_set(INT::BLECSSTAT) || irqs.is_set(INT::B2MST) {
-            // Enable interrupts
-            self.enable_interrupts();
+        // Enalbe the core BLE interrupts
+        regs.inten
+            .write(INT::CMDCMP::SET + INT::BLECIRQ::SET + INT::BLECSSTAT::SET);
 
-            if regs.bstatus.is_set(BSTATUS::BLEIRQ) {
-                panic!("Read requested while trying to write");
-            }
+        // if irqs.is_set(INT::BLECSSTAT) || irqs.is_set(INT::B2MST) {
+        //     // Enable interrupts
+        //     self.disable_interrupts();
+        //     self.enable_interrupts();
 
-            if !regs.bstatus.is_set(BSTATUS::SPISTATUS) {
-                panic!("SPI not ready");
-            }
+        //     if regs.bstatus.is_set(BSTATUS::BLEIRQ) {
+        //         panic!("Read requested while trying to write");
+        //     }
 
-            // If we have data, send it
-            if self.buffer.is_some() {
-                // Send the data
-                self.send_data();
-            }
-        }
+        //     // If we have data, send it
+        //     if self.write_len.get() > 0 {
+        //         // Send the data
+        //         self.send_data();
+        //     }
+        // }
 
         if irqs.is_set(INT::DCMP) {
+            self.write_len.set(0);
+        }
+
+        if irqs.is_set(INT::CMDCMP) {
             // Disable and clear DMA
             regs.dmacfg.set(0x00000000);
 
@@ -446,36 +562,52 @@ impl<'a> Ble<'a> {
 
             // Reset FIFOs
             self.reset_fifo();
-
-            if self.buffer.is_some() {
-                self.tx_client.map(|client| {
-                    client.transmit_event(self.buffer.take().unwrap(), kernel::ReturnCode::SUCCESS);
-                });
-            }
-
-            self.enable_interrupts();
         }
 
-        if irqs.is_set(INT::BLECIRQ) {
-            self.rx_client.map(|client| {
-                regs.cmd.modify(CMD::TSIZE.val(0) + CMD::CMD::READ);
+        // if irqs.is_set(INT::BLECIRQ) {
+        //     self.rx_client.map(|client| {
+        //         regs.cmd.modify(CMD::TSIZE.val(0) + CMD::CMD::READ);
 
-                unsafe {
-                    let mut i = 0;
+        //         unsafe {
+        //             let mut i = 0;
 
-                    while regs.fifoptr.read(FIFOPTR::FIFO1SIZ) > 0 && i < 40 {
-                        let temp = regs.fifopop.get().to_ne_bytes();
+        //             while regs.fifoptr.read(FIFOPTR::FIFO1SIZ) > 0 && i < 40 {
+        //                 let temp = regs.fifopop.get().to_ne_bytes();
 
-                        PAYLOAD[i + 0] = temp[0];
-                        PAYLOAD[i + 1] = temp[1];
-                        PAYLOAD[i + 2] = temp[2];
-                        PAYLOAD[i + 3] = temp[3];
+        //                 PAYLOAD[i + 0] = temp[0];
+        //                 PAYLOAD[i + 1] = temp[1];
+        //                 PAYLOAD[i + 2] = temp[2];
+        //                 PAYLOAD[i + 3] = temp[3];
 
-                        i = i + 4;
-                    }
+        //                 i = i + 4;
+        //             }
+        //             client.receive_event(&mut PAYLOAD, 10, kernel::ReturnCode::SUCCESS);
+        //         }
+        //     });
+        // }
 
-                    client.receive_event(&mut PAYLOAD, 10, kernel::ReturnCode::SUCCESS);
-                }
+        if irqs.is_set(INT::CMDCMP) || irqs.is_set(INT::BLECIRQ) || irqs.is_set(INT::BLECSSTAT) {
+            // Default to all causes being false
+            let mut cause = InterruptCause {
+                read_avalialbe: false,
+                write_ready: false,
+                command_complete: false,
+            };
+
+            // Set any causes that we see happened
+            if irqs.is_set(INT::CMDCMP) {
+                cause.command_complete = true;
+            }
+            if irqs.is_set(INT::BLECSSTAT) {
+                cause.write_ready = true;
+            }
+            if irqs.is_set(INT::BLECIRQ) {
+                cause.read_avalialbe = true;
+            }
+
+            // Call the interrupt client
+            self.client.map(|client| {
+                client.interrupt(Ok((cause)), self.buffer.take());
             });
         }
     }
@@ -483,7 +615,7 @@ impl<'a> Ble<'a> {
     pub fn enable_interrupts(&self) {
         let regs = &*self.registers;
 
-        regs.inten.set(0x18381);
+        regs.inten.set(0xFFFF_FFFF);
     }
 
     pub fn disable_interrupts(&self) {
@@ -493,9 +625,12 @@ impl<'a> Ble<'a> {
         regs.inten.set(0x00);
     }
 
-    fn replace_radio_buffer(&self, buf: &'static mut [u8]) -> &'static mut [u8] {
+    fn replace_radio_buffer(&self, buf: &'static mut [u8], len: usize) -> &'static mut [u8] {
         // set payload
         for (i, c) in buf.as_ref().iter().enumerate() {
+            if i > len {
+                break;
+            }
             unsafe {
                 PAYLOAD[i] = *c;
             }
@@ -504,11 +639,33 @@ impl<'a> Ble<'a> {
     }
 }
 
-impl<'a> ble_advertising::BleAdvertisementDriver<'a> for Ble<'a> {
-    fn transmit_advertisement(&self, buf: &'static mut [u8], len: usize, _channel: RadioChannel) {
-        let regs = &*self.registers;
+impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
+    fn set_client(&'a self, client: &'a dyn raw_ble::Client<'a>) {
+        self.client.set(client);
+    }
 
-        let res = self.replace_radio_buffer(buf);
+    fn read(
+        &self,
+        data: LeasableBuffer<'static, u8>,
+    ) -> Result<usize, (ReturnCode, &'static mut [u8])> {
+        Ok(data.len())
+    }
+
+    fn write(
+        &self,
+        data: LeasableBuffer<'static, u8>,
+    ) -> Result<usize, (ReturnCode, &'static mut [u8])> {
+        let regs = &*self.registers;
+        let len = data.len();
+
+        debug!(
+            "BLE write {}: {:x?} at address: {:x?}",
+            len,
+            data,
+            data.as_ptr() as *const u32
+        );
+
+        let res = self.replace_radio_buffer(data.take(), len);
 
         // Setup all of the buffers
         self.buffer.replace(res);
@@ -516,33 +673,69 @@ impl<'a> ble_advertising::BleAdvertisementDriver<'a> for Ble<'a> {
         self.read_len.set(0);
         self.read_index.set(0);
 
-        // Enable interrupts
-        self.enable_interrupts();
+        // regs.inten.set(0x00);
 
-        // Wakeup BLE
-        regs.blecfg.modify(BLECFG::WAKEUPCTL::ON);
+        // Disable DMA as we don't support it
+        regs.dmacfg.write(DMACFG::DMAEN::CLEAR);
 
-        // See if we can send the data
-        if regs.bstatus.is_set(BSTATUS::SPISTATUS) {
-            self.send_data();
+        // Enable IO Clock
+        regs.bledbg.modify(BLEDBG::IOCLKON::SET);
+
+        // Wake up BLE
+        regs.blecfg.modify(BLECFG::WAKEUPCTL::SET);
+
+        // Wait for it to wake
+        while !regs.bstatus.is_set(BSTATUS::SPISTATUS) {}
+
+        // Disable the IO clock
+        regs.bledbg.modify(BLEDBG::IOCLKON::CLEAR);
+
+        // Set the write FIFO threashold and disable the read
+        if self.write_len.get() > 4 {
+            regs.fifothr.write(
+                FIFOTHR::FIFORTHR.val(0) + FIFOTHR::FIFOWTHR.val(self.write_len.get() as u32 / 2),
+            );
+        } else {
+            regs.fifothr
+                .write(FIFOTHR::FIFORTHR.val(0) + FIFOTHR::FIFOWTHR.val(1));
         }
-    }
 
-    fn receive_advertisement(&self, _channel: RadioChannel) {
-        unimplemented!();
-    }
+        self.reset_fifo();
 
-    fn set_receive_client(&self, client: &'a dyn ble_advertising::RxClient) {
-        self.rx_client.set(client);
-    }
+        // Setup the operation
+        regs.cmd
+            .modify(CMD::TSIZE.val(self.write_len.get() as u32) + CMD::CMD::WRITE);
 
-    fn set_transmit_client(&self, client: &'a dyn ble_advertising::TxClient) {
-        self.tx_client.set(client);
-    }
-}
+        // self.disable_interrupts();
 
-impl ble_advertising::BleConfig for Ble<'_> {
-    fn set_tx_power(&self, _tx_power: u8) -> kernel::ReturnCode {
-        kernel::ReturnCode::SUCCESS
+        self.send_data();
+
+        regs.blecfg.modify(BLECFG::WAKEUPCTL::OFF);
+
+        // unsafe {
+        //     let mut ble_void = init_struct();
+        //     am_hal_ble_initialize(0, &mut ble_void);
+        //     let ret = am_hal_ble_blocking_hci_write(
+        //         ble_void,
+        //         0x00,
+        //         PAYLOAD.as_ptr() as *const u32,
+        //         len as u32,
+        //     );
+        //     // let ret = am_hal_ble_nonblocking_hci_write(
+        //     //     ble_void,
+        //     //     0x00,
+        //     //     PAYLOAD.as_ptr() as *const u32,
+        //     //     len as u32,
+        //     //     ptr::null(),
+        //     //     ptr::null()
+        //     // );
+        //     debug!("ret: {}, {:?}", ret, ret as i32);
+        // }
+
+        // self.enable_interrupts();
+
+        debug!("Finished sending");
+
+        Ok(len)
     }
 }

@@ -36,7 +36,7 @@ const FAULT_RESPONSE: kernel::procs::FaultResponse = kernel::procs::FaultRespons
 
 // RAM to be shared by all application processes.
 #[link_section = ".app_memory"]
-static mut APP_MEMORY: [u8; 32768] = [0; 32768];
+static mut APP_MEMORY: [u8; 135 * 1024] = [0; 135 * 1024];
 
 /// Dummy buffer that causes the linker to reserve enough space for the stack.
 #[no_mangle]
@@ -54,11 +54,7 @@ struct RedboardArtemisNano {
     gpio: &'static capsules::gpio::GPIO<'static, apollo3::gpio::GpioPin>,
     console: &'static capsules::console::Console<'static>,
     i2c_master: &'static capsules::i2c_master::I2CMasterDriver<apollo3::iom::Iom<'static>>,
-    ble_radio: &'static capsules::ble_advertising_driver::BLE<
-        'static,
-        apollo3::ble::Ble<'static>,
-        VirtualMuxAlarm<'static, apollo3::stimer::STimer<'static>>,
-    >,
+    ble_radio: &'static capsules::userspace_ble::BLE<'static, apollo3::ble::Ble<'static>>,
 }
 
 /// Mapping of integer syscalls to objects that implement syscalls.
@@ -73,7 +69,7 @@ impl Platform for RedboardArtemisNano {
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
             capsules::console::DRIVER_NUM => f(Some(self.console)),
             capsules::i2c_master::DRIVER_NUM => f(Some(self.i2c_master)),
-            capsules::ble_advertising_driver::DRIVER_NUM => f(Some(self.ble_radio)),
+            capsules::userspace_ble::DRIVER_NUM => f(Some(self.ble_radio)),
             _ => f(None),
         }
     }
@@ -194,8 +190,12 @@ pub unsafe fn reset_handler() {
     apollo3::ble::BLE.power_up();
     apollo3::ble::BLE.ble_initialise();
 
+    let read_buffer = static_init!([u8; 40], [0; 40]);
+    let write_buffer = static_init!([u8; 40], [0; 40]);
+
     let ble_radio =
-        ble::BLEComponent::new(board_kernel, &apollo3::ble::BLE, mux_alarm).finalize(());
+        ble::BLEComponent::new(board_kernel, &apollo3::ble::BLE, read_buffer, write_buffer)
+            .finalize(());
 
     apollo3::mcuctrl::MCUCTRL.print_chip_revision();
 
