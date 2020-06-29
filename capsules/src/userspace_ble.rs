@@ -174,8 +174,47 @@ where
         }
 
         match command_num {
-            // Start read command
+            // Check if we can read
             0 => self
+                .app
+                .enter(appid, |app, _| {
+                    match app.read.as_ref() {
+                        Some(_d) => {
+                            debug!("Checking read command");
+
+                            match app.read.as_mut() {
+                                Some(dest) => {
+                                    match self.radio.read_avalialbe() {
+                                        Some(len) => {
+                                            // Set the length in the first byte of the buffer
+                                            if len == 0 {
+                                                // If the driver doesn't support length, just tell userspace
+                                                // we have a length of 40 (the maximum avaliable)
+                                                dest.as_mut()[0] = 40;
+                                            } else {
+                                                dest.as_mut()[0] = len;
+                                            }
+                                        }
+                                        None => {
+                                            // Set 0 to indicate we can't read
+                                            dest.as_mut()[0] = 0;
+                                        }
+                                    }
+                                }
+                                None => {}
+                            };
+                        }
+                        None => {
+                            return ReturnCode::ERESERVE;
+                        }
+                    };
+
+                    ReturnCode::SUCCESS
+                })
+                .unwrap_or_else(|err| err.into()),
+
+            // Start read command
+            1 => self
                 .app
                 .enter(appid, |app, _| {
                     match app.read.as_ref() {
@@ -221,7 +260,9 @@ where
                 .unwrap_or_else(|err| err.into()),
 
             // Start write command
-            1 => self
+            2 => {
+                debug!("Write command");
+                self
                 .app
                 .enter(appid, |app, _| {
                     match app.write.as_ref() {
@@ -263,7 +304,8 @@ where
 
                     ReturnCode::SUCCESS
                 })
-                .unwrap_or_else(|err| err.into()),
+                .unwrap_or_else(|err| err.into())
+            },
 
             _ => ReturnCode::ENOSUPPORT,
         }

@@ -66,6 +66,8 @@ pub trait RawBleDriver<'a> {
         data: LeasableBuffer<'static, u8>,
     ) -> Result<(), (ReturnCode, &'static mut [u8])>;
 
+    fn read_avalialbe(&self) -> Option<u8>;
+
     /// Write data to the BLE device from the `data` buffer.
     /// On error the return value will contain a return code and the original
     /// data

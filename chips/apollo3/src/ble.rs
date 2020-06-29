@@ -265,9 +265,7 @@ pub struct Ble<'a> {
 
     buffer: TakeCell<'static, [u8]>,
     write_len: Cell<usize>,
-
     read_len: Cell<usize>,
-    read_index: Cell<usize>,
 }
 
 #[repr(C)]
@@ -322,7 +320,6 @@ impl<'a> Ble<'a> {
             buffer: TakeCell::empty(),
             write_len: Cell::new(0),
             read_len: Cell::new(0),
-            read_index: Cell::new(0),
         }
     }
 
@@ -538,22 +535,6 @@ impl<'a> Ble<'a> {
         regs.inten
             .write(INT::CMDCMP::SET + INT::BLECIRQ::SET + INT::BLECSSTAT::SET);
 
-        // if irqs.is_set(INT::BLECSSTAT) || irqs.is_set(INT::B2MST) {
-        //     // Enable interrupts
-        //     self.disable_interrupts();
-        //     self.enable_interrupts();
-
-        //     if regs.bstatus.is_set(BSTATUS::BLEIRQ) {
-        //         panic!("Read requested while trying to write");
-        //     }
-
-        //     // If we have data, send it
-        //     if self.write_len.get() > 0 {
-        //         // Send the data
-        //         self.send_data();
-        //     }
-        // }
-
         if irqs.is_set(INT::DCMP) {
             self.write_len.set(0);
         }
@@ -662,10 +643,9 @@ impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
         self.buffer.replace(data.take());
         self.read_len.set(len as usize);
         self.write_len.set(0);
-        self.read_index.set(0);
 
-        // debug!("Enable IRQs");
-        // self.enable_interrupts();
+        debug!("Enable IRQs");
+        self.enable_interrupts();
 
         unsafe {
             let mut ble_void = init_struct();
@@ -687,32 +667,40 @@ impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
             unsafe {
                 buf[i as usize] = PAYLOAD[i as usize];
             }
-            debug!("read: 0x{:x}", buf[i as usize]);
         }
 
         self.buffer.replace(buf);
 
-        // //
-        // // If the read succeeded, we need to wait for the IRQ signal to
-        // // go back down. If we don't we might inadvertently try to read
-        // // the same packet twice.
-        // //
-        // uint32_t ui32IRQRetries;
-        // for (ui32IRQRetries = 0; ui32IRQRetries < HCI_DRV_MAX_IRQ_TIMEOUT; ui32IRQRetries++)
-        // {
-        //     if (BLE_IRQ_CHECK() == 0 || g_ui32InterruptsSeen != ui32OldInterruptsSeen)
-        //     {
-        //         break;
-        //     }
+        // // //
+        // // // If the read succeeded, we need to wait for the IRQ signal to
+        // // // go back down. If we don't we might inadvertently try to read
+        // // // the same packet twice.
+        // // //
+        // // uint32_t ui32IRQRetries;
+        // // for (ui32IRQRetries = 0; ui32IRQRetries < HCI_DRV_MAX_IRQ_TIMEOUT; ui32IRQRetries++)
+        // // {
+        // //     if (BLE_IRQ_CHECK() == 0 || g_ui32InterruptsSeen != ui32OldInterruptsSeen)
+        // //     {
+        // //         break;
+        // //     }
 
-        //     am_util_delay_us(1);
-        // }
+        // //     am_util_delay_us(1);
+        // // }
 
         self.client.map(|client| {
             client.read_complete(Ok(num_bytes as usize), self.buffer.take());
         });
 
         Ok(())
+    }
+
+    fn read_avalialbe(&self) -> Option<u8> {
+        if self.registers.bstatus.is_set(BSTATUS::BLEIRQ) {
+            // We don't know the size, just say that we can read
+            Some(0)
+        } else {
+            None
+        }
     }
 
     fn write(
@@ -735,7 +723,6 @@ impl<'a> raw_ble::RawBleDriver<'a> for Ble<'a> {
         self.buffer.replace(res);
         self.write_len.set(len as usize);
         self.read_len.set(0);
-        self.read_index.set(0);
 
         // regs.inten.set(0x00);
 
