@@ -276,11 +276,6 @@ impl<'a, U: hil::usb::UsbController<'a>> hil::usb::Client<'a> for CtapHid<'a, U>
 
     /// Handle a Control Setup transaction.
     fn ctrl_setup(&'a self, endpoint: usize) -> hil::usb::CtrlSetupResult {
-        descriptors::SetupData::get(&self.client_ctrl.ctrl_buffer.buf).map(|setup_data| {
-            let _b_request = setup_data.request_code;
-            let _value = setup_data.value;
-        });
-
         self.client_ctrl.ctrl_setup(endpoint)
     }
 
