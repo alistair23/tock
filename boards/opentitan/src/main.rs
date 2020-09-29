@@ -17,6 +17,7 @@ use kernel::component::Component;
 use kernel::hil;
 use kernel::hil::i2c::I2CMaster;
 use kernel::hil::time::Alarm;
+use kernel::hil::usb::Client;
 use kernel::Chip;
 use kernel::Platform;
 use kernel::{create_capability, debug, static_init};
@@ -71,6 +72,10 @@ struct OpenTitan {
         'static,
         capsules::virtual_uart::UartDevice<'static>,
     >,
+    usb: &'static capsules::usb::usb_user::UsbSyscallDriver<
+        'static,
+        capsules::usb::usbc_client::Client<'static, lowrisc::usbdev::Usb<'static>>,
+    >,
     i2c_master: &'static capsules::i2c_master::I2CMasterDriver<lowrisc::i2c::I2c<'static>>,
     nonvolatile_storage: &'static capsules::nonvolatile_storage_driver::NonvolatileStorage<'static>,
 }
@@ -88,6 +93,7 @@ impl Platform for OpenTitan {
             capsules::console::DRIVER_NUM => f(Some(self.console)),
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
             capsules::low_level_debug::DRIVER_NUM => f(Some(self.lldb)),
+            capsules::usb::usb_user::DRIVER_NUM => f(Some(self.usb)),
             capsules::i2c_master::DRIVER_NUM => f(Some(self.i2c_master)),
             capsules::nonvolatile_storage_driver::DRIVER_NUM => f(Some(self.nonvolatile_storage)),
             _ => f(None),
@@ -280,9 +286,32 @@ pub unsafe fn reset_handler() {
 
     peripherals.i2c.set_master_client(i2c_master);
 
-    // USB support is currently broken in the OpenTitan hardware
-    // See https://github.com/lowRISC/opentitan/issues/2598 for more details
-    // let usb = usb::UsbComponent::new(board_kernel).finalize(());
+    let usb = usb::UsbComponent::new(&peripherals.usb, board_kernel).finalize(());
+
+    // Create the strings we include in the USB descriptor.
+    let strings = static_init!(
+        [&str; 3],
+        [
+            "LowRISC.",           // Manufacturer
+            "OpenTitan - TockOS", // Product
+            "18d1:503a",          // Serial number
+        ]
+    );
+
+    let cdc = components::cdc::CdcAcmComponent::new(
+        &peripherals.usb,
+        capsules::usb::cdc::MAX_CTRL_PACKET_SIZE_NRF52840,
+        0x18d1, // 0x18d1 Google Inc.
+        0x503a, // lowRISC generic FS USB
+        strings,
+    )
+    .finalize(components::usb_cdc_acm_component_helper!(
+        lowrisc::usbdev::Usb
+    ));
+
+    // Configure the USB stack to enable a serial port over CDC-ACM.
+    cdc.enable();
+    cdc.attach();
 
     // Kernel storage region, allocated with the storage_volume!
     // macro in common/utils.rs
@@ -324,6 +353,7 @@ pub unsafe fn reset_handler() {
         alarm: alarm,
         hmac,
         lldb: lldb,
+        usb,
         i2c_master,
         nonvolatile_storage,
     };
