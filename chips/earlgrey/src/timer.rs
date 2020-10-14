@@ -1,6 +1,5 @@
 //! Timer driver.
 
-use crate::chip_config::CONFIG;
 use kernel::common::cells::OptionalCell;
 use kernel::common::registers::{register_bitfields, register_structs, ReadWrite, WriteOnly};
 use kernel::common::StaticRef;
@@ -8,7 +7,9 @@ use kernel::hil::time;
 use kernel::hil::time::{Ticks, Ticks64, Time};
 use kernel::ReturnCode;
 
-const PRESCALE: u16 = ((CONFIG.cpu_freq / 10_000) - 1) as u16; // 10Khz
+use crate::chip::CHIP_FREQ;
+
+const PRESCALE: u16 = ((CHIP_FREQ / 10_000) - 1) as u16; // 10Khz
 
 /// 10KHz `Frequency`
 #[derive(Debug)]
