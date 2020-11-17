@@ -24,11 +24,13 @@ use kernel::hil;
 use kernel::hil::usb::TransferType;
 use kernel::ReturnCode;
 
-/// Use 1 Interrupt transfer IN/OUT endpoint
-const ENDPOINT_NUM: usize = 1;
-
 const OUT_BUFFER: usize = 0;
 const IN_BUFFER: usize = 1;
+
+/// The spec defines 1 Interrupt transfer in endpoint
+const ENDPOINT_IN_NUM: usize = 2;
+/// The spec defines 1 Interrupt transfer out endpoint
+const ENDPOINT_OUT_NUM: usize = 1;
 
 static LANGUAGES: &'static [u16; 1] = &[
     0x0409, // English (United States)
@@ -118,19 +120,13 @@ impl<'a, U: hil::usb::UsbController<'a>> CtapHid<'a, U> {
 
         let endpoints: &[&[EndpointDescriptor]] = &[&[
             EndpointDescriptor {
-                endpoint_address: EndpointAddress::new_const(
-                    ENDPOINT_NUM,
-                    TransferDirection::DeviceToHost,
-                ),
+                endpoint_address: EndpointAddress::new_const(0x02, TransferDirection::DeviceToHost),
                 transfer_type: TransferType::Interrupt,
                 max_packet_size: 64,
                 interval: 5,
             },
             EndpointDescriptor {
-                endpoint_address: EndpointAddress::new_const(
-                    ENDPOINT_NUM,
-                    TransferDirection::HostToDevice,
-                ),
+                endpoint_address: EndpointAddress::new_const(0x01, TransferDirection::HostToDevice),
                 transfer_type: TransferType::Interrupt,
                 max_packet_size: 64,
                 interval: 5,
@@ -202,7 +198,7 @@ impl<'a, U: hil::usb::UsbController<'a>> hil::usb_hid::UsbHid<'a, [u8; 64]> for 
         let len = send.len();
 
         self.send_buffer.replace(send);
-        self.controller().endpoint_resume_in(ENDPOINT_NUM);
+        self.controller().endpoint_resume_in(ENDPOINT_IN_NUM);
 
         Ok(len)
     }
@@ -237,7 +233,7 @@ impl<'a, U: hil::usb::UsbController<'a>> hil::usb_hid::UsbHid<'a, [u8; 64]> for 
             }
         } else {
             // If we have nothing to process, accept more data
-            self.controller().endpoint_resume_out(ENDPOINT_NUM);
+            self.controller().endpoint_resume_out(ENDPOINT_OUT_NUM);
         }
 
         Ok(())
@@ -259,11 +255,14 @@ impl<'a, U: hil::usb::UsbController<'a>> hil::usb::Client<'a> for CtapHid<'a, U>
 
         // Setup buffers for IN and OUT data transfer.
         self.controller()
-            .endpoint_set_out_buffer(ENDPOINT_NUM, &self.buffers[OUT_BUFFER].buf);
+            .endpoint_set_in_buffer(ENDPOINT_IN_NUM, &self.buffers[IN_BUFFER].buf);
         self.controller()
-            .endpoint_set_in_buffer(ENDPOINT_NUM, &self.buffers[IN_BUFFER].buf);
+            .endpoint_in_enable(TransferType::Interrupt, ENDPOINT_IN_NUM);
+
         self.controller()
-            .endpoint_in_out_enable(TransferType::Interrupt, ENDPOINT_NUM);
+            .endpoint_set_out_buffer(ENDPOINT_OUT_NUM, &self.buffers[OUT_BUFFER].buf);
+        self.controller()
+            .endpoint_out_enable(TransferType::Interrupt, ENDPOINT_OUT_NUM);
     }
 
     fn attach(&'a self) {
@@ -294,7 +293,7 @@ impl<'a, U: hil::usb::UsbController<'a>> hil::usb::Client<'a> for CtapHid<'a, U>
     /// Handle the completion of a Control transfer
     fn ctrl_status_complete(&'a self, endpoint: usize) {
         if self.send_buffer.is_some() {
-            self.controller().endpoint_resume_in(ENDPOINT_NUM);
+            self.controller().endpoint_resume_in(ENDPOINT_IN_NUM);
         }
 
         self.client_ctrl.ctrl_status_complete(endpoint)
