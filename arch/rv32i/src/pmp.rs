@@ -418,7 +418,7 @@ impl kernel::mpu::MPU for PMP {
             return None;
         }
 
-        let region = PMPRegion::new(region_start as *const u8, initial_app_memory_size, permissions);
+        let region = PMPRegion::new(region_start as *const u8, region_size, permissions);
 
         config.regions[region_num] = Some(region);
         config.is_dirty.set(true);
