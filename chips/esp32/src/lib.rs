@@ -6,6 +6,7 @@
 #![crate_type = "rlib"]
 
 pub mod gpio;
+pub mod ledc;
 pub mod rtc_cntl;
 pub mod timg;
 pub mod uart;

@@ -9,6 +9,7 @@
 #![test_runner(test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
+use crate::hil::led::LedHigh;
 use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use esp32_c3::chip::Esp32C3DefaultPeripherals;
 use kernel::capabilities;
@@ -67,6 +68,8 @@ pub static mut STACK_MEMORY: [u8; 0x900] = [0; 0x900];
 /// capsules for this platform. We've included an alarm and console.
 struct Esp32C3Board {
     gpio: &'static capsules::gpio::GPIO<'static, esp32::gpio::GpioPin<'static>>,
+    led:
+        &'static capsules::led::LedDriver<'static, LedHigh<'static, esp32::gpio::GpioPin<'static>>>,
     console: &'static capsules::console::Console<'static>,
     alarm: &'static capsules::alarm::AlarmDriver<
         'static,
@@ -84,6 +87,7 @@ impl SyscallDriverLookup for Esp32C3Board {
     {
         match driver_num {
             capsules::gpio::DRIVER_NUM => f(Some(self.gpio)),
+            capsules::led::DRIVER_NUM => f(Some(self.led)),
             capsules::console::DRIVER_NUM => f(Some(self.console)),
             capsules::alarm::DRIVER_NUM => f(Some(self.alarm)),
             _ => f(None),
@@ -151,7 +155,7 @@ unsafe fn setup() -> (
     DynamicDeferredCall::set_global_instance(dynamic_deferred_caller);
 
     // Configure kernel debug gpios as early as possible
-    kernel::debug::assign_gpios(None, None, None);
+    kernel::debug::assign_gpios(Some(&peripherals.gpio[8]), None, None);
 
     // Create a shared UART channel for the console and for kernel debug.
     let uart_mux = components::console::UartMuxComponent::new(
@@ -160,6 +164,16 @@ unsafe fn setup() -> (
         dynamic_deferred_caller,
     )
     .finalize(());
+
+    // LEDs
+    // Start with half on and half off
+    let led = components::led::LedsComponent::new(components::led_component_helper!(
+        LedHigh<'static, esp32::gpio::GpioPin>,
+        LedHigh::new(&peripherals.gpio[8]),
+    ))
+    .finalize(components::led_component_buf!(
+        LedHigh<'static, esp32::gpio::GpioPin>
+    ));
 
     let gpio = components::gpio::GpioComponent::new(
         board_kernel,
@@ -261,6 +275,7 @@ unsafe fn setup() -> (
             console,
             alarm,
             gpio,
+            led,
             scheduler,
             scheduler_timer,
         }
