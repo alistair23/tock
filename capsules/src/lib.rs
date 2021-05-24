@@ -7,6 +7,7 @@ pub mod test;
 #[macro_use]
 pub mod net;
 
+pub mod accel;
 pub mod adc;
 pub mod adc_microphone;
 pub mod alarm;
