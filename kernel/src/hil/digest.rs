@@ -174,6 +174,50 @@ pub trait DigestDataVerify<'a, const L: usize>: DigestData<'a, L> + DigestVerify
 
 impl<'a, T: DigestData<'a, L> + DigestVerify<'a, L>, const L: usize> DigestDataVerify<'a, L> for T {}
 
+/// Implement this trait and use `set_client()` in order to receive callbacks.
+///
+/// 'L' is the length of the 'u8' array to store the digest output.
+pub trait BackupClient<'a, const L: usize> {
+    /// This callback is called when a backup is computed.
+    /// On error or success `dest` will contain a reference to the original
+    /// buffer supplied to `backup()`.
+    fn backup_done(&'a self, result: Result<(), ErrorCode>, dest: &'static mut [u8; L]);
+
+    /// This callback is called when a restore is complete.
+    /// On error or success `source` will contain a reference to the original
+    /// buffer supplied to `restore()`.
+    fn restore_done(&'a self, result: Result<(), ErrorCode>, source: &'static mut [u8; L]);
+}
+
+/// Support for backup and restore of a in procress digest.
+///
+/// This provides support for backing up the context and working
+/// state of an in process operation. This allows a higher priority
+/// operation to interrupt an in progress operation.
+///
+/// 'L' is the length of the 'u8' array to store the digest output.
+pub trait DigestBackup<'a, const L: usize> {
+    /// Set the client instance which will receive `backup_done()` and
+    /// `restore_done()` callbacks.
+    fn set_client(&'a self, client: &'a dyn BackupClient<'a, L>);
+
+    /// Backup the current Digest working state to the `dest` buffer.
+    /// This doesn't return any data, instead the client needs to have
+    /// set a `backup_done()` handler to determine when this is complete.
+    fn backup(
+        &'a self,
+        dest: &'static mut [u8; L],
+    ) -> Result<(), (ErrorCode, &'static mut [u8; L])>;
+
+    /// Restore a previous Digest working state from the `source` buffer.
+    /// The restore operation is not complete until the `restore_done()`
+    /// callback is complete.
+    fn restore(
+        &'a self,
+        source: &'static mut [u8; L],
+    ) -> Result<(), (ErrorCode, &'static mut [u8; L])>;
+}
+
 pub trait Sha224 {
     /// Call before `Digest::run()` to perform Sha224
     fn set_mode_sha224(&self) -> Result<(), ErrorCode>;
