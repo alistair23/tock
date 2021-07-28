@@ -24,7 +24,7 @@ pub enum Mode {
 }
 
 pub struct VirtualMuxDigest<'a, A: digest::Digest<'a, L>, const L: usize> {
-    mux: &'a MuxDigest<'a, A, L>,
+    pub(crate) mux: &'a MuxDigest<'a, A, L>,
     next: ListLink<'a, VirtualMuxDigest<'a, A, L>>,
     sha_client: OptionalCell<&'a dyn digest::Client<'a, L>>,
     hmac_client: OptionalCell<&'a dyn digest::Client<'a, L>>,
@@ -84,6 +84,10 @@ impl<'a, A: digest::Digest<'a, L>, const L: usize> VirtualMuxDigest<'a, A, L> {
             self.mux.users.push_head(self);
         }
         self.sha_client.set(client);
+    }
+
+    pub fn is_busy(&self) -> bool {
+        self.mux.running.get()
     }
 }
 
@@ -386,7 +390,7 @@ impl<'a, A: digest::Digest<'a, L> + digest::Sha512, const L: usize> digest::Sha5
 /// Mux calls `clear_data()` it will be the only `VirtualMuxDigest` that can
 /// interact with the underlying device.
 pub struct MuxDigest<'a, A: digest::Digest<'a, L>, const L: usize> {
-    digest: &'a A,
+    pub(crate) digest: &'a A,
     running: Cell<bool>,
     running_id: Cell<u32>,
     next_id: Cell<u32>,

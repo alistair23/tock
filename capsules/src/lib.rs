@@ -90,6 +90,7 @@ pub mod virtual_digest;
 pub mod virtual_flash;
 pub mod virtual_hmac;
 pub mod virtual_i2c;
+pub mod virtual_priority_digest;
 pub mod virtual_pwm;
 pub mod virtual_rng;
 pub mod virtual_sha;
