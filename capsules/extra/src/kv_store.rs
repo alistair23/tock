@@ -408,33 +408,46 @@ impl<'a, K: KVSystem<'a, K = T>, T: kv_system::KeyType + core::fmt::Debug> kv_sy
             Operation::Delete => {
                 let mut access_allowed = false;
 
-                let header = KeyHeader::new_from_buf(ret_buf);
+                // Before we delete a key we retrive the header to ensure that
+                // we have permissions to access it. In that case we don't need
+                // to supply a buffer long enough to store the key, so we can
+                // ignore the `SIZE` error code and continue to remove the key
+                if result.is_ok() || result.err() == Some(ErrorCode::SIZE) {
+                    let header = KeyHeader::new_from_buf(ret_buf);
 
-                if header.version == HEADER_VERSION {
-                    self.valid_ids.map(|perms| {
-                        access_allowed = perms.check_write_permission(header.write_id);
-                    });
-                }
+                    if header.version == HEADER_VERSION {
+                        self.valid_ids.map(|perms| {
+                            access_allowed = perms.check_write_permission(header.write_id);
+                        });
+                    }
 
-                self.header_value.replace(ret_buf);
+                    self.header_value.replace(ret_buf);
 
-                if access_allowed {
-                    self.hashed_key.take().map(|hashed_key| {
-                        if let Err((key, e)) = self.mux_kv.kv.invalidate_key(hashed_key) {
-                            self.hashed_key.replace(key);
-                            self.unhashed_key.take().map(|unhashed_key| {
-                                self.client.map(move |cb| {
-                                    cb.delete_complete(e, unhashed_key);
+                    if access_allowed {
+                        self.hashed_key.take().map(|hashed_key| {
+                            if let Err((key, e)) = self.mux_kv.kv.invalidate_key(hashed_key) {
+                                self.hashed_key.replace(key);
+                                self.unhashed_key.take().map(|unhashed_key| {
+                                    self.client.map(move |cb| {
+                                        cb.delete_complete(e, unhashed_key);
+                                    });
                                 });
+                            }
+                        });
+                    } else {
+                        self.unhashed_key.take().map(|unhashed_key| {
+                            self.client.map(move |cb| {
+                                cb.delete_complete(Err(ErrorCode::FAIL), unhashed_key);
                             });
-                        }
-                    });
+                        });
+                    }
                 } else {
                     self.unhashed_key.take().map(|unhashed_key| {
                         self.client.map(move |cb| {
-                            cb.delete_complete(Err(ErrorCode::FAIL), unhashed_key);
+                            cb.get_complete(Err(ErrorCode::FAIL), unhashed_key, ret_buf);
                         });
                     });
+                    self.mux_kv.operation.clear();
                 }
             }
             Operation::Get => {

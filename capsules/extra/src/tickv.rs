@@ -282,6 +282,16 @@ impl<'a, F: Flash, H: Hasher<'a, 8>, const PAGE_SIZE: usize> flash::Client<F>
                         );
                     });
                 }
+                Err(tickv::error_codes::ErrorCode::BufferTooSmall(_)) => {
+                    self.operation.set(Operation::None);
+                    self.client.map(|cb| {
+                        cb.get_value_complete(
+                            Err(ErrorCode::SIZE),
+                            self.key_buffer.take().unwrap(),
+                            self.ret_buffer.take().unwrap(),
+                        );
+                    });
+                }
                 Err(tickv::error_codes::ErrorCode::EraseNotReady(_)) | Ok(_) => {}
                 _ => {
                     self.operation.set(Operation::None);
