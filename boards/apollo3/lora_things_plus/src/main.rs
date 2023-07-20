@@ -407,8 +407,8 @@ unsafe fn setup() -> (
         components::gpio_component_helper!(
             apollo3::gpio::GpioPin,
             0 => &&peripherals.gpio_port[36], // H6 - SX1262 Slave Select
-            1 => &&peripherals.gpio_port[39], // J8 - SX1262 Radio Busy Indicator
-            2 => &&peripherals.gpio_port[40], // J9 - SX1262 Multipurpose digital I/O (DIO1)
+            1 => &&peripherals.gpio_port[37], // J8 - SX1262 Radio Busy Indicator
+            2 => &&peripherals.gpio_port[41], // J9 - SX1262 Multipurpose digital I/O (DIO1)
             3 => &&peripherals.gpio_port[47], // H9 - SX1262 Multipurpose digital I/O (DIO3)
             4 => &&peripherals.gpio_port[44], // J7 - SX1262 Reset
         ),

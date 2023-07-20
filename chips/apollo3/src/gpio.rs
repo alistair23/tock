@@ -202,13 +202,12 @@ impl Port<'_> {
         regs.altpadcfgj
             .modify(ALTPADCFG::PAD3_DS1::CLEAR + ALTPADCFG::PAD3_SR::CLEAR);
 
-        // Pin 40 DIO1
+        // Pin 41 DIO1
         regs.padreg[10].modify(
             PADREG::PAD0PULL::CLEAR
-                + PADREG::PAD0INPEN::SET
-                + PADREG::PAD0STRING::CLEAR
-                + PADREG::PAD0FNCSEL.val(0x3)
-                + PADREG::PAD0RSEL.val(0x0),
+                + PADREG::PAD1INPEN::SET
+                + PADREG::PAD1FNCSEL.val(0x3)
+                + PADREG::PAD1RSEL.val(0x0),
         );
         regs.cfg[5].modify(
             CFG::GPIO0INCFG.val(0x00) + CFG::GPIO0OUTCFG.val(0x00) + CFG::GPIO0INTD.val(0x00),
