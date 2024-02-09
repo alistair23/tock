@@ -272,9 +272,9 @@ unsafe fn setup() -> (
         )
     );
 
-    let i2c_master_buffer = static_init!([u8; 32], [0; 32]);
-    let i2c_slave_buffer1 = static_init!([u8; 32], [0; 32]);
-    let i2c_slave_buffer2 = static_init!([u8; 32], [0; 32]);
+    let i2c_master_buffer = static_init!([u8; 128], [0; 128]);
+    let i2c_slave_buffer1 = static_init!([u8; 128], [0; 128]);
+    let i2c_slave_buffer2 = static_init!([u8; 128], [0; 128]);
 
     let i2c_master_slave = static_init!(
         I2CMasterSlaveDriver<

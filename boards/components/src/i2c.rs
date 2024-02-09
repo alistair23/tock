@@ -49,9 +49,9 @@ macro_rules! i2c_component_static {
 #[macro_export]
 macro_rules! i2c_master_slave_component_static {
     ($I:ty $(,)?) => {{
-        let i2c_master_buffer = kernel::static_buf!([u8; 32]);
-        let i2c_slave_buffer1 = kernel::static_buf!([u8; 32]);
-        let i2c_slave_buffer2 = kernel::static_buf!([u8; 32]);
+        let i2c_master_buffer = kernel::static_buf!([u8; 128]);
+        let i2c_slave_buffer1 = kernel::static_buf!([u8; 128]);
+        let i2c_slave_buffer2 = kernel::static_buf!([u8; 128]);
 
         let driver = kernel::static_buf!(
             capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver<'static, $I>
@@ -144,18 +144,18 @@ impl<I: 'static + i2c::I2CMasterSlave<'static>> Component for I2CMasterSlaveDriv
         &'static mut MaybeUninit<
             capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver<'static, I>,
         >,
-        &'static mut MaybeUninit<[u8; 32]>,
-        &'static mut MaybeUninit<[u8; 32]>,
-        &'static mut MaybeUninit<[u8; 32]>,
+        &'static mut MaybeUninit<[u8; 128]>,
+        &'static mut MaybeUninit<[u8; 128]>,
+        &'static mut MaybeUninit<[u8; 128]>,
     );
     type Output = &'static capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver<'static, I>;
 
     fn finalize(self, static_buffer: Self::StaticInput) -> Self::Output {
         let grant_cap = create_capability!(capabilities::MemoryAllocationCapability);
 
-        let i2c_master_buffer = static_buffer.1.write([0; 32]);
-        let i2c_slave_buffer1 = static_buffer.2.write([0; 32]);
-        let i2c_slave_buffer2 = static_buffer.3.write([0; 32]);
+        let i2c_master_buffer = static_buffer.1.write([0; 128]);
+        let i2c_slave_buffer1 = static_buffer.2.write([0; 128]);
+        let i2c_slave_buffer2 = static_buffer.3.write([0; 128]);
 
         let i2c_master_slave_driver = static_buffer.0.write(
             capsules_core::i2c_master_slave_driver::I2CMasterSlaveDriver::new(
