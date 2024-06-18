@@ -16,6 +16,7 @@ use kernel::utilities::math;
 use kernel::utilities::registers::interfaces::{Readable, Writeable};
 use kernel::utilities::registers::{register_bitfields, FieldValue, ReadOnly, ReadWrite};
 use kernel::utilities::StaticRef;
+use kernel::ErrorCode;
 
 /// MPU Registers for the Cortex-M3, Cortex-M4 and Cortex-M7 families
 /// Described in section 4.5 of
@@ -182,6 +183,9 @@ pub struct CortexMConfig<const NUM_REGIONS: usize> {
 /// needs.
 const APP_MEMORY_REGION_MAX_NUM: usize = 1;
 
+/// For simplicity we currently support only a single device pass through.
+const APP_DEVICE_PASSTHROUGH: usize = APP_MEMORY_REGION_MAX_NUM + 1;
+
 impl<const NUM_REGIONS: usize> fmt::Display for CortexMConfig<NUM_REGIONS> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\r\n Cortex-M MPU")?;
@@ -239,7 +243,7 @@ impl<const NUM_REGIONS: usize> fmt::Display for CortexMConfig<NUM_REGIONS> {
 impl<const NUM_REGIONS: usize> CortexMConfig<NUM_REGIONS> {
     fn unused_region_number(&self) -> Option<usize> {
         for (number, region) in self.regions.iter().enumerate() {
-            if number <= APP_MEMORY_REGION_MAX_NUM {
+            if number <= APP_DEVICE_PASSTHROUGH {
                 continue;
             }
             if let None = region.location() {
@@ -262,6 +266,16 @@ impl PartialEq<mpu::Region> for CortexMRegion {
     fn eq(&self, other: &mpu::Region) -> bool {
         self.location.map_or(false, |(addr, size)| {
             addr == other.start_address() && size == other.size()
+        })
+    }
+}
+
+impl PartialEq<CortexMRegion> for CortexMRegion {
+    fn eq(&self, other: &CortexMRegion) -> bool {
+        self.location.map_or(false, |(addr, size)| {
+            other.location.map_or(false, |(other_addr, other_size)| {
+                addr == other_addr && size == other_size
+            })
         })
     }
 }
@@ -557,7 +571,7 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
             .find(|(_idx, r)| **r == region)
             .ok_or(())?;
 
-        if idx <= APP_MEMORY_REGION_MAX_NUM {
+        if idx <= APP_DEVICE_PASSTHROUGH {
             return Err(());
         }
 
@@ -784,6 +798,61 @@ impl<const NUM_REGIONS: usize, const MIN_REGION_SIZE: usize> mpu::MPU
             }
             self.hardware_is_configured_for.set(config.id);
             config.is_dirty.set(false);
+        }
+    }
+
+    /// Allocate a region of memory to an application
+    ///
+    /// For simplicity we only allow a single region to be allocated at any
+    /// time.
+    fn allocate_app_device_region(
+        &self,
+        memory_start: *const u8,
+        memory_size: usize,
+        config: &mut Self::MpuConfig,
+    ) -> Result<(), ErrorCode> {
+        if config.regions[APP_DEVICE_PASSTHROUGH].location().is_some() {
+            // Something is already configured, return an error
+            return Err(ErrorCode::ALREADY);
+        }
+
+        config.regions[APP_DEVICE_PASSTHROUGH] = CortexMRegion::new(
+            memory_start,
+            memory_size,
+            memory_start,
+            memory_size,
+            APP_DEVICE_PASSTHROUGH,
+            None,
+            mpu::Permissions::ReadWriteOnly,
+        );
+        config.is_dirty.set(true);
+
+        Ok(())
+    }
+
+    fn deallocate_app_device_region(
+        &self,
+        memory_start: *const u8,
+        memory_size: usize,
+        config: &mut Self::MpuConfig,
+    ) -> Result<(), ErrorCode> {
+        let region = CortexMRegion::new(
+            memory_start,
+            memory_size,
+            memory_start,
+            memory_size,
+            APP_DEVICE_PASSTHROUGH,
+            None,
+            mpu::Permissions::ReadWriteOnly,
+        );
+
+        if config.regions[APP_DEVICE_PASSTHROUGH] == region {
+            config.regions[APP_DEVICE_PASSTHROUGH] = CortexMRegion::empty(APP_DEVICE_PASSTHROUGH);
+            config.is_dirty.set(true);
+
+            Ok(())
+        } else {
+            Err(ErrorCode::INVAL)
         }
     }
 }
