@@ -994,6 +994,20 @@ impl<C: Chip> Process for ProcessStandard<'_, C> {
         self.process_name
     }
 
+    fn allocate_device_passthrough(
+        &self,
+        memory_start: *const u8,
+        memory_size: usize,
+    ) -> Result<(), ErrorCode> {
+        self.mpu_config.map_or(Err(ErrorCode::INVAL), |config| {
+            self.chip
+                .mpu()
+                .allocate_app_device_region(memory_start, memory_size, config)?;
+
+            Ok(())
+        })
+    }
+
     fn get_completion_code(&self) -> Option<Option<u32>> {
         self.completion_code.get()
     }
