@@ -5,6 +5,7 @@
 //! IO Master Driver (I2C and SPI)
 
 use core::cell::Cell;
+use kernel::debug;
 use kernel::hil;
 use kernel::hil::gpio::Configure;
 use kernel::hil::i2c;
@@ -437,6 +438,8 @@ impl<'a> Iom<'_> {
                 d |= (buf[data_idx + 2] as u32) << 16;
                 d |= (buf[data_idx + 3] as u32) << 24;
 
+                debug!("I2C: W {d:x}");
+
                 regs.fifopush.set(d);
 
                 data_pushed = data_idx + 4;
@@ -497,6 +500,8 @@ impl<'a> Iom<'_> {
 
                 let d = regs.fifopop.get().to_ne_bytes();
 
+                debug!("Read: {:x?}", d);
+
                 buf[data_idx + 0] = d[0];
                 buf[data_idx + 1] = d[1];
                 buf[data_idx + 2] = d[2];
@@ -537,6 +542,8 @@ impl<'a> Iom<'_> {
         regs.intclr.set(0xFFFF_FFFF);
         // Ensure interrupts remain enabled
         regs.inten.set(0xFFFF_FFFF);
+
+        debug!("irqs: 0x{irqs:x?}");
 
         if irqs.is_set(INT::NAK) {
             if self.op.get() == Operation::I2C {
@@ -763,6 +770,11 @@ impl<'a> Iom<'_> {
                 }
 
                 if irqs.is_set(INT::CMDCMP) {
+                    debug!("irqs: INT::CMDCMP");
+
+                    debug!("read_len: {}", self.read_len.get());
+                    debug!("read_index: {}", self.read_index.get());
+
                     if (self.read_len.get() > 0 && self.read_index.get() == self.read_len.get())
                         || (self.write_len.get() > 0
                             && self.write_index.get() == self.write_len.get())
@@ -958,6 +970,7 @@ impl<'a> Iom<'_> {
         regs.inten.set(0xFFFF_FFFF);
 
         // Start the transfer
+        debug!("Start the transfer: {len}");
         regs.cmd
             .write(CMD::TSIZE.val(len as u32) + CMD::CMD::WRITE + CMD::CONT::CLEAR);
         Ok(())

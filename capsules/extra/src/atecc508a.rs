@@ -103,7 +103,7 @@ const COMMAND_OPCODE_SIGN: u8 = 0x41; // Create an ECC signature with contents o
 #[allow(dead_code)]
 const COMMAND_OPCODE_VERIFY: u8 = 0x45; // takes an ECDSA <R,S> signature and verifies that it is correctly generated from a given message and public key
 
-const VERIFY_MODE_EXTERNAL: u8 = 0b00000010; // Use an external public key for verification, pass to command as data post param2, ds pg 89
+const VERIFY_MODE_EXTERNAL: u8 = 0x02; // Use an external public key for verification, pass to command as data post param2, ds pg 89
 #[allow(dead_code)]
 const VERIFY_MODE_STORED: u8 = 0b00000000; // Use an internally stored public key for verification, param2 = keyID, ds pg 89
 const VERIFY_PARAM2_KEYTYPE_ECC: u8 = 0x0004; // When verify mode external, param2 should be KeyType, ds pg 89
@@ -132,6 +132,7 @@ const BUFFER_SIZE: usize = 128;
 
 const RESPONSE_SIGNAL_INDEX: usize = RESPONSE_COUNT_SIZE;
 const ATRCC508A_SUCCESSFUL_TEMPKEY: u8 = 0x00;
+const ATRCC508A_SUCCESSFUL_VERIFY: u8 = 0x00;
 const ATRCC508A_SUCCESSFUL_LOCK: u8 = 0x00;
 
 const WORD_ADDRESS_VALUE_RESET: u8 = 0x00;
@@ -176,6 +177,7 @@ enum Operation {
     LoadTempKeyNonce(usize),
     LoadTempKeyCheckNonce(usize),
     VerifySubmitData(usize),
+    CompleteVerify(usize),
 }
 
 pub struct Atecc508a<'a> {
@@ -198,6 +200,7 @@ pub struct Atecc508a<'a> {
     secure_client: OptionalCell<&'a dyn ClientVerify<32, 64>>,
     message_data: TakeCell<'static, [u8; 32]>,
     signature_data: TakeCell<'static, [u8; 64]>,
+    ext_public_key: TakeCell<'static, [u8; 64]>,
 
     wakeup_device: fn(),
 
@@ -231,6 +234,7 @@ impl<'a> Atecc508a<'a> {
             secure_client: OptionalCell::empty(),
             message_data: TakeCell::empty(),
             signature_data: TakeCell::empty(),
+            ext_public_key: TakeCell::empty(),
             wakeup_device,
             config_lock: Cell::new(false),
             data_lock: Cell::new(false),
@@ -441,6 +445,24 @@ impl<'a> Atecc508a<'a> {
         Ok(&self.public_key)
     }
 
+    /// Set the public key to use for the `verify` command, if using an
+    /// external key.
+    ///
+    /// This will return the previous key if one was stored. Pass in
+    /// `None` to retrieve the key without providing a new one.
+    pub fn set_public_key(
+        &'a self,
+        public_key: Option<&'static mut [u8; 64]>,
+    ) -> Option<&'static mut [u8; 64]> {
+        let ret = self.ext_public_key.take();
+
+        if let Some(key) = public_key {
+            self.ext_public_key.replace(key);
+        }
+
+        ret
+    }
+
     /// Lock the data and OTP
     pub fn lock_data_and_otp(&self) -> Result<(), ErrorCode> {
         self.op.set(Operation::LockDataOtp(0));
@@ -537,8 +559,6 @@ impl<'a> Atecc508a<'a> {
 
 impl<'a> I2CClient for Atecc508a<'a> {
     fn command_complete(&self, buffer: &'static mut [u8], status: Result<(), i2c::Error>) {
-        debug!("command_complete");
-
         match self.op.get() {
             Operation::Ready => unreachable!(),
             Operation::ReadySha => {
@@ -1042,11 +1062,10 @@ impl<'a> I2CClient for Atecc508a<'a> {
                 self.op.set(Operation::LoadTempKeyCheckNonce(0));
 
                 debug!("  read response");
-                let _ = self.i2c
-                    .read(
-                        buffer,
-                        RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
-                    );
+                let _ = self.i2c.read(
+                    buffer,
+                    RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
+                );
             }
             Operation::LoadTempKeyCheckNonce(run) => {
                 debug!("Operation::LoadTempKeyCheckNonce");
@@ -1061,9 +1080,10 @@ impl<'a> I2CClient for Atecc508a<'a> {
                     }
 
                     self.op.set(Operation::LoadTempKeyCheckNonce(run + 1));
-                    let _ = self
-                        .i2c
-                        .read(buffer, RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE);
+                    let _ = self.i2c.read(
+                        buffer,
+                        RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
+                    );
                     return;
                 }
 
@@ -1082,15 +1102,17 @@ impl<'a> I2CClient for Atecc508a<'a> {
                     return;
                 }
 
+                // Append Signature
                 self.signature_data.map(|signature_data| {
                     buffer[ATRCC508A_PROTOCOL_FIELD_DATA..(ATRCC508A_PROTOCOL_FIELD_DATA + 64)]
                         .copy_from_slice(signature_data);
                 });
 
-                self.message_data.map(|message_data| {
+                // Append Public Key
+                self.ext_public_key.map(|ext_public_key| {
                     buffer[(ATRCC508A_PROTOCOL_FIELD_DATA + 64)
-                        ..(ATRCC508A_PROTOCOL_FIELD_DATA + 64 + 32)]
-                        .copy_from_slice(message_data);
+                        ..(ATRCC508A_PROTOCOL_FIELD_DATA + 128)]
+                        .copy_from_slice(ext_public_key);
                 });
 
                 self.buffer.replace(buffer);
@@ -1101,11 +1123,84 @@ impl<'a> I2CClient for Atecc508a<'a> {
                     COMMAND_OPCODE_VERIFY,
                     VERIFY_MODE_EXTERNAL,
                     VERIFY_PARAM2_KEYTYPE_ECC as u16,
-                    64 + 32,
+                    128,
                 );
             }
-            Operation::VerifySubmitData(_run) => {
-                todo!();
+            Operation::VerifySubmitData(run) => {
+                debug!("Operation::VerifySubmitData");
+
+                if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
+                    debug!("Nack");
+                    self.buffer.replace(buffer);
+
+                    // The device isn't ready yet, try again
+                    if run == 10 {
+                        self.op.set(Operation::Ready);
+                        return;
+                    }
+
+                    self.op.set(Operation::VerifySubmitData(run + 1));
+                    self.send_command(
+                        COMMAND_OPCODE_VERIFY,
+                        VERIFY_MODE_EXTERNAL,
+                        VERIFY_PARAM2_KEYTYPE_ECC as u16,
+                        128,
+                    );
+                    return;
+                }
+
+                self.op.set(Operation::CompleteVerify(0));
+                let _ = self.i2c.read(
+                    buffer,
+                    RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
+                );
+            }
+            Operation::CompleteVerify(run) => {
+                debug!("Operation::CompleteVerify");
+
+                if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
+                    debug!("Nack");
+
+                    // The device isn't ready yet, try again
+                    if run == 50 {
+                        self.op.set(Operation::Ready);
+                        return;
+                    }
+
+                    self.op.set(Operation::CompleteVerify(run + 1));
+                    let _ = self.i2c.read(
+                        buffer,
+                        RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
+                    );
+                    return;
+                }
+
+                let ret = buffer[RESPONSE_SIGNAL_INDEX];
+
+                self.op.set(Operation::Ready);
+                self.buffer.replace(buffer);
+
+                self.secure_client.map(|client| {
+                    if ret == ATRCC508A_SUCCESSFUL_VERIFY {
+                        client.verification_done(
+                            Ok(true),
+                            self.message_data.take().unwrap(),
+                            self.signature_data.take().unwrap(),
+                        );
+                    } else if ret == 1 {
+                        client.verification_done(
+                            Ok(false),
+                            self.message_data.take().unwrap(),
+                            self.signature_data.take().unwrap(),
+                        );
+                    } else {
+                        client.verification_done(
+                            Err(ErrorCode::FAIL),
+                            self.message_data.take().unwrap(),
+                            self.signature_data.take().unwrap(),
+                        );
+                    }
+                });
             }
         }
     }
