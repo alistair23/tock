@@ -1042,10 +1042,7 @@ impl<'a> I2CClient for Atecc508a<'a> {
                 });
             }
             Operation::LoadTempKeyNonce(run) => {
-                debug!("Operation::LoadTempKeyNonce");
-
                 if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
-                    debug!("Nack");
                     self.buffer.replace(buffer);
 
                     // The device isn't ready yet, try again
@@ -1061,18 +1058,13 @@ impl<'a> I2CClient for Atecc508a<'a> {
 
                 self.op.set(Operation::LoadTempKeyCheckNonce(0));
 
-                debug!("  read response");
                 let _ = self.i2c.read(
                     buffer,
                     RESPONSE_COUNT_SIZE + RESPONSE_SIGNAL_SIZE + CRC_SIZE,
                 );
             }
             Operation::LoadTempKeyCheckNonce(run) => {
-                debug!("Operation::LoadTempKeyCheckNonce");
-
                 if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
-                    debug!("Nack");
-
                     // The device isn't ready yet, try again
                     if run == 10 {
                         self.op.set(Operation::Ready);
@@ -1087,7 +1079,6 @@ impl<'a> I2CClient for Atecc508a<'a> {
                     return;
                 }
 
-                debug!("  got response");
                 if buffer[RESPONSE_SIGNAL_INDEX] != ATRCC508A_SUCCESSFUL_TEMPKEY {
                     self.buffer.replace(buffer);
 
@@ -1118,7 +1109,6 @@ impl<'a> I2CClient for Atecc508a<'a> {
                 self.buffer.replace(buffer);
                 self.op.set(Operation::VerifySubmitData(0));
 
-                debug!("  sending command");
                 self.send_command(
                     COMMAND_OPCODE_VERIFY,
                     VERIFY_MODE_EXTERNAL,
@@ -1127,10 +1117,7 @@ impl<'a> I2CClient for Atecc508a<'a> {
                 );
             }
             Operation::VerifySubmitData(run) => {
-                debug!("Operation::VerifySubmitData");
-
                 if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
-                    debug!("Nack");
                     self.buffer.replace(buffer);
 
                     // The device isn't ready yet, try again
@@ -1156,13 +1143,9 @@ impl<'a> I2CClient for Atecc508a<'a> {
                 );
             }
             Operation::CompleteVerify(run) => {
-                debug!("Operation::CompleteVerify");
-
                 if status == Err(i2c::Error::DataNak) || status == Err(i2c::Error::AddressNak) {
-                    debug!("Nack");
-
                     // The device isn't ready yet, try again
-                    if run == 50 {
+                    if run == 100 {
                         self.op.set(Operation::Ready);
                         return;
                     }
